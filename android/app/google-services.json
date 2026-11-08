@@ -12,7 +12,20 @@
           "package_name": "com.arsu.oilmill"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "797982120974-cn98iqhftunp35votfvhbutjhj79uli8.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.arsu.oilmill",
+            "certificate_hash": "5e838f745d4ca2355c5ae60ce618d4633e8f4355"
+          }
+        },
+        {
+          "client_id": "797982120974-lclr914sdp4j19qemnh62q0gmpbt9ade.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyC1d-QuP0LgzZSUjDxH-Fumq3CLOVmPLaY"
@@ -20,7 +33,12 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "797982120974-ddf5po8b46ea6u5g9gi8j51onkd7e001.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
         }
       }
     }
