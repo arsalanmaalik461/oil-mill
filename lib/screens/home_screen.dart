@@ -13,6 +13,7 @@ import 'cash_book_screen.dart';
 import 'party_detail_screen.dart';
 import 'party_form_screen.dart';
 import 'recycle_bin_screen.dart';
+import 'roznamcha_screen.dart';
 import 'staff_book_screen.dart';
 import 'stock_book_screen.dart';
 
@@ -540,6 +541,12 @@ class _HomeScreenState extends State<HomeScreen> {
                               MaterialPageRoute(
                                   builder: (_) => const CashBookScreen()));
                         }),
+                        _moduleButton(Icons.auto_stories, p.t('roznamcha'), () {
+                          Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                  builder: (_) => const RoznamchaScreen()));
+                        }),
                         _moduleButton(Icons.inventory_2, p.t('stockBook'), () {
                           Navigator.push(
                               context,
@@ -557,12 +564,6 @@ class _HomeScreenState extends State<HomeScreen> {
                               context,
                               MaterialPageRoute(
                                   builder: (_) => StaffBookScreen()));
-                        }),
-                        _moduleButton(Icons.delete, p.t('recycleBin'), () {
-                          Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                  builder: (_) => RecycleBinScreen()));
                         }),
                       ],
                     ),

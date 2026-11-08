@@ -6,6 +6,7 @@ import '../providers/app_provider.dart';
 import '../theme/app_theme.dart';
 import '../utils/helpers.dart';
 import '../utils/pdf_service.dart';
+import 'roznamcha_screen.dart';
 
 class _ReportData {
   final Business business;
@@ -315,6 +316,35 @@ class _ReportsScreenState extends State<ReportsScreen> {
           return ListView(
             padding: const EdgeInsets.fromLTRB(12, 4, 12, 20),
             children: [
+              Card(
+                color: AppColors.primary.withValues(alpha: 0.08),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  side: BorderSide(color: AppColors.primary.withValues(alpha: 0.3)),
+                ),
+                child: ListTile(
+                  leading: const CircleAvatar(
+                    backgroundColor: AppColors.primary,
+                    child: Icon(Icons.auto_stories, color: Colors.white),
+                  ),
+                  title: Text(
+                    p.t('dailyClosing'),
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                  ),
+                  subtitle: Text(
+                    p.isUrdu
+                        ? 'صبح کا کیش، وصولی، ادائیگی اور پیداواری خلاصہ'
+                        : 'Opening & closing cash, wasool, adaigi and production',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  trailing: const Icon(Icons.arrow_forward_ios, size: 16, color: AppColors.primary),
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const RoznamchaScreen()),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 6),
               _sectionTitle(p.t('dailyReport')),
               _statGrid([
                 _statCard(p.t('cashIn'), formatRs(d.todayCashIn), Icons.arrow_downward, AppColors.green),
