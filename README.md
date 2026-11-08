@@ -109,3 +109,50 @@ This needs a **one-time setup by the app owner** — Google sign-in cannot work 
 6. If the OAuth consent screen is in **Testing** mode, add the Google account(s) that will use the feature as **test users** (APIs & Services → OAuth consent screen → Test users). Otherwise sign-in fails for everyone not listed.
 
 > **Without this one-time setup the Connect button cannot sign in** — the app shows "Google sign-in failed" together with the setup note. Everything else in the app keeps working fully offline, exactly as before; Google Drive is an optional backup destination, never a requirement.
+
+## Firebase + App Login System (Nov 2026)
+
+Firebase project: **Namat Oil Mill** (`namat-oil-mill`) on the owner's Google
+account. `android/app/google-services.json` is in place; the Android app
+(com.arsu.oilmill) is registered in the project. Firestore is the cloud
+database — every user's record and business data live there:
+
+- `app_users/{username}` — one document per app user: `business_name`,
+  `email`, `phone`, `password_hash` (salted SHA-256), `active`, `created_at`.
+- `app_users/{username}/tables/{table}` — that user's full business data
+  (parties, bills, stock, production, …). Users can never see each other's
+  data: the app only ever reads/writes the signed-in user's own area, and
+  locally each business is bound to one username (DB column
+  `businesses.app_username`); Settings only lets a signed-in user switch
+  between their own businesses.
+
+### How sign-in works
+- The app opens on a **Welcome** login screen. Sign-in is only with an ID
+  the admin created: **User ID, Email, or Phone + password**. There is no
+  self-registration. Wrong credentials show "Wrong user ID or password."
+- A successful online sign-in caches a hash on that device, so the same
+  user can still sign in offline there later.
+- On a new phone, sign-in automatically restores that user's data from
+  Firestore. Settings → Account also has manual **Sync** / **Restore**,
+  **Change Password**, and **Logout**.
+
+### Admin (owner only)
+- On the login screen, **press and hold the "Welcome" heading for 15
+  seconds** → admin sign-in → **Admin Panel**. The admin can only manage
+  users: create a user (business name + user ID + email/phone + password),
+  change a user's password, activate/deactivate, or delete a user.
+- The admin password is stored in the app only as a salted hash
+  (`lib/utils/admin_config.dart`).
+
+### Changing a password — 3 ways
+1. The user, inside the app: Settings → Account → Change Password.
+2. The admin: hidden Admin Panel → user → Change Password.
+3. Directly in the Firebase Console: open `app_users/{username}` and set a
+   field `password_reset_plain` to the new password. The user signs in with
+   it once; the app immediately converts it to a hash and deletes the plain
+   field.
+
+### Google Sign-In note (Drive backup)
+For the Google Drive connect feature to work in a real build, the SHA-1 of
+the signing keystore (debug and/or release) must be added in Firebase →
+Project settings → the Android app → "SHA certificate fingerprints".

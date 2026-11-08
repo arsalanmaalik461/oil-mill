@@ -6,6 +6,7 @@ import '../l10n/app_strings.dart';
 class AppProvider extends ChangeNotifier {
   String _lang = 'en';
   int _businessId = 1;
+  String _sessionUsername = '';
   bool _pinEnabled = false;
   bool _fingerprintEnabled = false;
   int _tick = 0; // bump to force data screens to reload
@@ -13,6 +14,8 @@ class AppProvider extends ChangeNotifier {
   String get lang => _lang;
   bool get isUrdu => _lang == 'ur';
   int get businessId => _businessId;
+  String get sessionUsername => _sessionUsername;
+  bool get isLoggedIn => _sessionUsername.isNotEmpty;
   bool get pinEnabled => _pinEnabled;
   bool get fingerprintEnabled => _fingerprintEnabled;
   int get tick => _tick;
@@ -25,6 +28,7 @@ class AppProvider extends ChangeNotifier {
     _lang = prefs.getString('lang') ?? 'en';
     _businessId = prefs.getInt('business_id') ?? 1;
     _pinEnabled = prefs.getString('pin_hash') != null;
+    _sessionUsername = prefs.getString('session_username') ?? '';
     _fingerprintEnabled = prefs.getBool('fingerprint_enabled') ?? false;
     notifyListeners();
   }
@@ -47,6 +51,23 @@ class AppProvider extends ChangeNotifier {
     _fingerprintEnabled = v;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('fingerprint_enabled', v);
+    notifyListeners();
+  }
+
+  /// Records the logged-in app user (Firebase app_users username) and the
+  /// local business that user's data belongs to.
+  Future<void> signInSession(String username, int businessId) async {
+    _sessionUsername = username;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('session_username', username);
+    await setBusiness(businessId);
+    notifyListeners();
+  }
+
+  Future<void> signOutSession() async {
+    _sessionUsername = '';
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('session_username');
     notifyListeners();
   }
 

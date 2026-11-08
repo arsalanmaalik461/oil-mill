@@ -47,7 +47,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   GoogleSignInAccount? _googleAccount;
   bool _googleBusy = false;
   bool _autoDriveBackup = true;
-  bool _firebaseBusy = false;
+  bool _accountBusy = false;
   final _firebase = FirebaseService.instance;
 
   @override
@@ -173,7 +173,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
       return;
     }
     final id = await _db.insertBusiness(
-      Business(name: name, owner: owner, phone: phone, address: address),
+      Business(
+          name: name,
+          owner: owner,
+          phone: phone,
+          address: address,
+          appUsername: p.sessionUsername),
     );
     if (!mounted) return;
     await p.setBusiness(id);
@@ -465,43 +470,170 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  Future<void> _syncToFirebase(AppProvider p) async {
-    if (_firebaseBusy) return;
-    setState(() => _firebaseBusy = true);
+  // ---------------- Account (per-user Firebase) ----------------
+
+  /// Per-user cloud sync: uploads this user's business data to their
+  /// own Firebase area (users/{username}/businesses/{id}).
+  Future<void> _syncMyData(AppProvider p) async {
+    if (_accountBusy) return;
+    setState(() => _accountBusy = true);
     try {
       if (!_firebase.isConfigured) {
         showSnack(context, p.t('firebaseNotSetup'));
         return;
       }
-      final count = await _firebase.syncAllLocalToCloud(p.businessId);
+      final count =
+          await _firebase.syncUserData(p.sessionUsername, p.businessId);
       if (!mounted) return;
-      showSnack(context, '${p.t('syncDone')} ($count items)');
+      showSnack(context, '${p.t('syncDone')} ($count)');
+    } on StateError catch (e) {
+      if (!mounted) return;
+      showSnack(
+        context,
+        e.message == 'firebase-not-configured'
+            ? p.t('firebaseNotSetup')
+            : 'Firebase Error: $e',
+      );
     } catch (e) {
       if (!mounted) return;
       showSnack(context, 'Firebase Error: $e');
     } finally {
-      if (mounted) setState(() => _firebaseBusy = false);
+      if (mounted) setState(() => _accountBusy = false);
     }
   }
 
-  Future<void> _restoreFromFirebase(AppProvider p) async {
-    if (_firebaseBusy) return;
-    setState(() => _firebaseBusy = true);
+  /// Per-user cloud restore: downloads this user's cloud backup into
+  /// the local database (asks for confirmation first).
+  Future<void> _restoreMyData(AppProvider p) async {
+    if (_accountBusy) return;
+    final proceed = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        content: Text(p.t('restoreConfirm')),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(c, false),
+              child: Text(p.t('cancel'))),
+          TextButton(
+              onPressed: () => Navigator.pop(c, true),
+              child: const Text('Continue')),
+        ],
+      ),
+    );
+    if (proceed != true || !mounted) return;
+    setState(() => _accountBusy = true);
     try {
       if (!_firebase.isConfigured) {
         showSnack(context, p.t('firebaseNotSetup'));
         return;
       }
-      final count = await _firebase.restoreCloudToLocal(p.businessId);
+      final count =
+          await _firebase.restoreUserData(p.sessionUsername, p.businessId);
       if (!mounted) return;
-      p.bump();
-      showSnack(context, '${p.t('restoreDone')} ($count items)');
+      if (count == 0) {
+        showSnack(
+          context,
+          p.isUrdu
+              ? 'فائر بیس میں کوئی بیک اپ نہیں ملا۔'
+              : 'No backup found in Firebase.',
+        );
+      } else {
+        showSnack(context, '${p.t('restoreDone')} ($count)');
+        p.bump();
+      }
+    } on StateError catch (e) {
+      if (!mounted) return;
+      showSnack(
+        context,
+        e.message == 'firebase-not-configured'
+            ? p.t('firebaseNotSetup')
+            : 'Firebase Error: $e',
+      );
     } catch (e) {
       if (!mounted) return;
       showSnack(context, 'Firebase Error: $e');
     } finally {
-      if (mounted) setState(() => _firebaseBusy = false);
+      if (mounted) setState(() => _accountBusy = false);
     }
+  }
+
+  /// Change-password dialog for the signed-in app user. The old
+  /// password is verified against the Firebase app_users record.
+  Future<void> _changeAccountPassword(AppProvider p) async {
+    if (!_firebase.isConfigured) {
+      showSnack(context, p.t('firebaseNotReady'));
+      return;
+    }
+    final oldC = TextEditingController();
+    final newC = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: Text(p.t('changePassword')),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: oldC,
+              obscureText: true,
+              decoration: InputDecoration(labelText: p.t('oldPassword')),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: newC,
+              obscureText: true,
+              decoration: InputDecoration(labelText: p.t('newPassword')),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(c, false),
+              child: Text(p.t('cancel'))),
+          TextButton(
+              onPressed: () => Navigator.pop(c, true),
+              child: Text(p.t('save'))),
+        ],
+      ),
+    );
+    final oldPw = oldC.text;
+    final newPw = newC.text;
+    oldC.dispose();
+    newC.dispose();
+    if (ok != true || !mounted) return;
+    if (newPw.length < 6) {
+      showSnack(context, p.t('passwordTooShort'));
+      return;
+    }
+    setState(() => _accountBusy = true);
+    try {
+      await _firebase.changeOwnPassword(p.sessionUsername, oldPw, newPw);
+      if (!mounted) return;
+      showSnack(context, p.t('passwordChanged'));
+    } on StateError catch (e) {
+      if (!mounted) return;
+      showSnack(
+        context,
+        e.message == 'wrong' ? p.t('wrongCredentials') : 'Firebase Error: $e',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      showSnack(context, 'Firebase Error: $e');
+    } finally {
+      if (mounted) setState(() => _accountBusy = false);
+    }
+  }
+
+  /// Signs out of Firebase (if any session) and clears the app-user
+  /// session. RootGate watches the provider and returns to the login
+  /// screen on its own — no manual navigation here.
+  Future<void> _logoutSession(AppProvider p) async {
+    try {
+      await _firebase.signOut();
+    } catch (_) {
+      // Even if Firebase sign-out errors, clear the local session.
+    }
+    await p.signOutSession();
   }
 
   // ---------------- Build ----------------
@@ -544,12 +676,69 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
           ),
+          if (p.sessionUsername.isNotEmpty) ...[
+            _sectionTitle(p.t('accountSection')),
+            Card(
+              child: Column(
+                children: [
+                  ListTile(
+                    leading:
+                        const Icon(Icons.person, color: AppColors.primary),
+                    title: Text('${p.t('loggedInAs')}: ${p.sessionUsername}'),
+                    subtitle: cur != null ? Text(cur.name) : null,
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.key, color: AppColors.primary),
+                    title: Text(p.t('changePassword')),
+                    onTap:
+                        _accountBusy ? null : () => _changeAccountPassword(p),
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.cloud_upload,
+                        color: AppColors.primary),
+                    title: Text(p.t('syncMyData')),
+                    trailing: _accountBusy
+                        ? const SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : null,
+                    onTap: _accountBusy ? null : () => _syncMyData(p),
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.cloud_download,
+                        color: AppColors.primary),
+                    title: Text(p.t('restoreMyData')),
+                    trailing: _accountBusy
+                        ? const SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : null,
+                    onTap: _accountBusy ? null : () => _restoreMyData(p),
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.logout, color: Colors.red),
+                    title: Text(
+                      p.t('logoutBtn'),
+                      style: const TextStyle(color: Colors.red),
+                    ),
+                    onTap: () => _logoutSession(p),
+                  ),
+                ],
+              ),
+            ),
+          ],
           _sectionTitle(p.t('switchBusiness')),
           Card(
             child: Column(
               children: [
                 for (final b in _businesses)
-                  if (b.id != null)
+                  if (b.id != null &&
+                      (p.sessionUsername.isEmpty ||
+                          b.appUsername == p.sessionUsername))
                     RadioListTile<int>(
                       value: b.id!,
                       groupValue: p.businessId,
@@ -738,30 +927,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ? 'Logged in as: ${_firebase.currentUser!.email}'
                           : 'Firebase Active')
                       : p.t('firebaseNotSetup')),
-                ),
-                ListTile(
-                  leading: const Icon(Icons.cloud_upload, color: AppColors.primary),
-                  title: Text(p.t('syncToCloud')),
-                  trailing: _firebaseBusy
-                      ? const SizedBox(
-                          width: 22,
-                          height: 22,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : null,
-                  onTap: _firebaseBusy ? null : () => _syncToFirebase(p),
-                ),
-                ListTile(
-                  leading: const Icon(Icons.cloud_download, color: AppColors.primary),
-                  title: Text(p.t('restoreFromCloud')),
-                  trailing: _firebaseBusy
-                      ? const SizedBox(
-                          width: 22,
-                          height: 22,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : null,
-                  onTap: _firebaseBusy ? null : () => _restoreFromFirebase(p),
                 ),
               ],
             ),

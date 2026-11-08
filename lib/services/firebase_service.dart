@@ -1,4 +1,8 @@
+import 'dart:convert';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:crypto/crypto.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
@@ -222,3 +226,239 @@ class FirebaseService {
   }
 }
 
+/// One app-user record (Firestore collection `app_users`, doc id = username).
+/// Created ONLY by the app admin; the user signs in with username, email or
+/// phone + password. Passwords are stored as salted SHA-256 hashes. If the
+/// owner sets a `password_reset_plain` field on the doc from the Firebase
+/// Console, the next sign-in with that password succeeds once and the field
+/// is replaced by a hash.
+class AppUserRecord {
+  final String username;
+  final String businessName;
+  final String email;
+  final String phone;
+  final bool active;
+  const AppUserRecord({
+    required this.username,
+    required this.businessName,
+    this.email = '',
+    this.phone = '',
+    this.active = true,
+  });
+}
+
+extension FirebaseUsers on FirebaseService {
+  static String _hashPw(String password, String salt) =>
+      sha256.convert(utf8.encode('$salt:$password')).toString();
+
+  CollectionReference<Map<String, dynamic>> get _users =>
+      firestore!.collection('app_users');
+
+  /// Finds a user by username, email, or phone. Null when not found.
+  Future<Map<String, dynamic>?> _findUserDoc(String identifier) async {
+    final id = identifier.trim();
+    final byName = await _users.doc(id.toLowerCase()).get();
+    if (byName.exists) return {'id': byName.id, ...byName.data()!};
+    for (final field in ['email', 'phone']) {
+      final q = await _users.where(field, isEqualTo: id).limit(1).get();
+      if (q.docs.isNotEmpty) {
+        return {'id': q.docs.first.id, ...q.docs.first.data()};
+      }
+    }
+    return null;
+  }
+
+  /// Verifies sign-in credentials. Returns the user record on success.
+  /// Throws a [StateError] with a user-facing code on failure:
+  /// 'wrong' (no such user / bad password) or 'inactive'.
+  Future<AppUserRecord> loginUser(String identifier, String password) async {
+    if (!isConfigured) throw StateError('firebase-not-configured');
+    final doc = await _findUserDoc(identifier);
+    if (doc == null) throw StateError('wrong');
+    if (doc['active'] == false) throw StateError('inactive');
+    final username = doc['id'] as String;
+    bool ok = doc['password_hash'] == _hashPw(password, username);
+    if (!ok && (doc['password_reset_plain'] as String?) == password) {
+      // One-time plain reset set from the Firebase Console: upgrade to hash.
+      await _users.doc(username).update({
+        'password_hash': _hashPw(password, username),
+        'password_reset_plain': FieldValue.delete(),
+      });
+      ok = true;
+    }
+    if (!ok) throw StateError('wrong');
+    final rec = AppUserRecord(
+      username: username,
+      businessName: (doc['business_name'] as String?) ?? '',
+      email: (doc['email'] as String?) ?? '',
+      phone: (doc['phone'] as String?) ?? '',
+    );
+    await cacheLogin(rec, _hashPw(password, username));
+    return rec;
+  }
+
+  Future<void> createUser({
+    required String username,
+    required String businessName,
+    required String email,
+    required String phone,
+    required String password,
+  }) async {
+    if (!isConfigured) throw StateError('firebase-not-configured');
+    final uname = username.trim().toLowerCase();
+    final existing = await _users.doc(uname).get();
+    if (existing.exists) throw StateError('user-exists');
+    await _users.doc(uname).set({
+      'business_name': businessName.trim(),
+      'email': email.trim(),
+      'phone': phone.trim(),
+      'password_hash': _hashPw(password, uname),
+      'active': true,
+      'created_at': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Future<List<AppUserRecord>> listUsers() async {
+    if (!isConfigured) throw StateError('firebase-not-configured');
+    final snap = await _users.get();
+    final out = snap.docs
+        .map((d) => AppUserRecord(
+              username: d.id,
+              businessName: (d.data()['business_name'] as String?) ?? '',
+              email: (d.data()['email'] as String?) ?? '',
+              phone: (d.data()['phone'] as String?) ?? '',
+              active: d.data()['active'] != false,
+            ))
+        .toList()
+      ..sort((a, b) => a.username.compareTo(b.username));
+    return out;
+  }
+
+  Future<void> setUserPassword(String username, String newPassword) async {
+    if (!isConfigured) throw StateError('firebase-not-configured');
+    await _users.doc(username).update({
+      'password_hash': _hashPw(newPassword, username),
+      'password_reset_plain': FieldValue.delete(),
+    });
+  }
+
+  Future<void> setUserActive(String username, bool active) async {
+    if (!isConfigured) throw StateError('firebase-not-configured');
+    await _users.doc(username).update({'active': active});
+  }
+
+  Future<void> deleteUser(String username) async {
+    if (!isConfigured) throw StateError('firebase-not-configured');
+    await _users.doc(username).delete();
+  }
+
+  /// Changes the signed-in user's own password (verifies the old one).
+  Future<void> changeOwnPassword(
+      String username, String oldPassword, String newPassword) async {
+    final doc = await _findUserDoc(username);
+    if (doc == null) throw StateError('wrong');
+    if (doc['password_hash'] != _hashPw(oldPassword, username) &&
+        (doc['password_reset_plain'] as String?) != oldPassword) {
+      throw StateError('wrong');
+    }
+    await setUserPassword(username, newPassword);
+    final cached = await _cachedUsers();
+    if (cached.containsKey(username)) {
+      cached[username]['password_hash'] = _hashPw(newPassword, username);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('cached_users', jsonEncode(cached));
+    }
+  }
+
+  // ---------- Offline sign-in cache (this device only) ----------
+  Future<Map<String, dynamic>> _cachedUsers() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('cached_users');
+    if (raw == null || raw.isEmpty) return {};
+    try {
+      return Map<String, dynamic>.from(jsonDecode(raw) as Map);
+    } catch (_) {
+      return {};
+    }
+  }
+
+  Future<void> cacheLogin(AppUserRecord rec, String passwordHash) async {
+    final cached = await _cachedUsers();
+    cached[rec.username] = {
+      'business_name': rec.businessName,
+      'email': rec.email,
+      'phone': rec.phone,
+      'password_hash': passwordHash,
+    };
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('cached_users', jsonEncode(cached));
+  }
+
+  /// Offline fallback: verifies against the record cached on THIS device
+  /// from a previous successful online sign-in.
+  Future<AppUserRecord?> loginUserCached(
+      String identifier, String password) async {
+    final cached = await _cachedUsers();
+    final id = identifier.trim().toLowerCase();
+    for (final e in cached.entries) {
+      final v = Map<String, dynamic>.from(e.value as Map);
+      if (e.key == id || v['email'] == identifier.trim() || v['phone'] == identifier.trim()) {
+        if (v['password_hash'] == _hashPw(password, e.key)) {
+          return AppUserRecord(
+            username: e.key,
+            businessName: (v['business_name'] as String?) ?? '',
+            email: (v['email'] as String?) ?? '',
+            phone: (v['phone'] as String?) ?? '',
+          );
+        }
+        return null;
+      }
+    }
+    return null;
+  }
+
+  // ---------- Per-user full data sync ----------
+  /// Uploads ALL data of [businessId] to Firestore under this user's own
+  /// area: app_users/{username}/tables/{table} — other users never see it.
+  Future<int> syncUserData(String username, int businessId) async {
+    if (!isConfigured) throw StateError('firebase-not-configured');
+    final data = await DatabaseHelper.instance.exportBusinessData(businessId);
+    final root = _users.doc(username).collection('tables');
+    var count = 0;
+    for (final entry in data.entries) {
+      if (entry.key == 'app' || entry.key == 'version') continue;
+      final rows = (entry.value as List)
+          .map((r) => Map<String, dynamic>.from(r as Map))
+          .toList();
+      await root.doc(entry.key).set({
+        'rows': rows,
+        'updated_at': FieldValue.serverTimestamp(),
+      });
+      count += rows.length;
+    }
+    await _users.doc(username).set({
+      'last_sync_at': FieldValue.serverTimestamp(),
+      'last_sync_count': count,
+    }, SetOptions(merge: true));
+    return count;
+  }
+
+  /// Downloads this user's cloud data and replaces the local data of
+  /// [businessId]. Returns the number of rows restored (0 = nothing in cloud).
+  Future<int> restoreUserData(String username, int businessId) async {
+    if (!isConfigured) throw StateError('firebase-not-configured');
+    final root = _users.doc(username).collection('tables');
+    final snap = await root.get();
+    if (snap.docs.isEmpty) return 0;
+    final data = <String, dynamic>{'app': 'namat_oil_mill', 'version': 1};
+    var count = 0;
+    for (final doc in snap.docs) {
+      final rows = (doc.data()['rows'] as List?) ?? const [];
+      data[doc.id] = rows;
+      count += rows.length;
+    }
+    if (count == 0) return 0;
+    await DatabaseHelper.instance.importBusinessData(businessId, data);
+    return count;
+  }
+}

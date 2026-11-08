@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "797982120974",
+    "project_id": "namat-oil-mill",
+    "storage_bucket": "namat-oil-mill.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:797982120974:android:517af8c16114d3651fb05f",
+        "android_client_info": {
+          "package_name": "com.arsu.oilmill"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC1d-QuP0LgzZSUjDxH-Fumq3CLOVmPLaY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

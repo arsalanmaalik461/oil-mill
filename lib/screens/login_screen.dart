@@ -1,12 +1,25 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../db/database_helper.dart';
+import '../models/models.dart';
 import '../providers/app_provider.dart';
 import '../services/firebase_service.dart';
 import '../theme/app_theme.dart';
-import '../utils/google_drive_service.dart';
+import '../utils/admin_config.dart';
 import '../utils/helpers.dart';
+import 'admin_panel_screen.dart';
 
+/// Login screen — the app's entry point.
+///
+/// Sign-in is ONLY with an ID created by the app admin (User ID, Email or
+/// Phone + password). User records live in Firestore (`app_users`) via
+/// [FirebaseService]. There is no self-registration.
+///
+/// Hidden admin access: pressing and holding the "Welcome" heading for
+/// 15 seconds opens the admin sign-in dialog.
 class LoginScreen extends StatefulWidget {
   final bool isStandalone;
   const LoginScreen({super.key, this.isStandalone = false});
@@ -16,102 +29,288 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final _emailCtrl = TextEditingController();
+  final _idCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
-  bool _isRegister = false;
   bool _busy = false;
 
+  // --- 15-second hold on "Welcome" (hidden admin access) ---
+  Timer? _holdTimer;
+  Timer? _tickTimer;
+  bool _holding = false;
+  double _holdProgress = 0;
+
   final _firebase = FirebaseService.instance;
-  final _drive = GoogleDriveService.instance;
 
   @override
   void dispose() {
-    _emailCtrl.dispose();
+    _holdTimer?.cancel();
+    _tickTimer?.cancel();
+    _idCtrl.dispose();
     _passCtrl.dispose();
     super.dispose();
   }
 
-  void _proceedToApp() {
-    if (Navigator.canPop(context)) {
-      Navigator.pop(context);
-    }
-  }
+  // ---------------- Hidden admin hold ----------------
 
-  Future<void> _handleGoogleSignIn(AppProvider p) async {
-    setState(() => _busy = true);
-    try {
-      final account = await _drive.signIn();
-      if (account != null && mounted) {
-        showSnack(context, '${p.t('googleConnected')}: ${account.email}');
-        _proceedToApp();
-      }
-    } catch (e) {
-      if (mounted) {
-        showSnack(context, 'Google Sign-In: $e');
-      }
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  Future<void> _handleEmailAuth(AppProvider p) async {
-    final email = _emailCtrl.text.trim();
-    final pass = _passCtrl.text.trim();
-
-    if (email.isEmpty || pass.isEmpty) {
-      showSnack(context, p.isUrdu ? 'براہ کرم ای میل اور پاس ورڈ درج کریں۔' : 'Please enter email and password.');
-      return;
-    }
-
-    if (pass.length < 6) {
-      showSnack(context, p.isUrdu ? 'پاس ورڈ کم از کم 6 ہندسوں کا ہونا چاہیے۔' : 'Password must be at least 6 characters.');
-      return;
-    }
-
-    setState(() => _busy = true);
-    try {
-      if (!_firebase.isConfigured) {
-        // Safe offline simulated login if Firebase google-services.json not yet placed
-        showSnack(context, p.isUrdu ? 'کامیابی سے لاگ ان ہو گئے۔' : 'Signed in successfully.');
-        _proceedToApp();
+  void _startHold() {
+    if (_holding) return;
+    _holdTimer?.cancel();
+    _tickTimer?.cancel();
+    setState(() {
+      _holding = true;
+      _holdProgress = 0;
+    });
+    final start = DateTime.now();
+    _tickTimer = Timer.periodic(const Duration(milliseconds: 100), (t) {
+      if (!mounted) {
+        t.cancel();
         return;
       }
+      final elapsed =
+          DateTime.now().difference(start).inMilliseconds / 15000.0;
+      setState(() => _holdProgress = elapsed.clamp(0.0, 1.0));
+    });
+    _holdTimer = Timer(const Duration(seconds: 15), () {
+      _resetHold();
+      if (mounted) _showAdminDialog();
+    });
+  }
 
-      if (_isRegister) {
-        await _firebase.registerWithEmail(email, pass);
-        if (mounted) {
-          showSnack(context, p.isUrdu ? 'نیا اکاؤنٹ بن گیا۔' : 'Account created successfully.');
-          _proceedToApp();
+  void _endHold() {
+    // Released / cancelled before 15 seconds: reset, no admin dialog.
+    if (_holdTimer?.isActive ?? false) _resetHold();
+  }
+
+  void _resetHold() {
+    _holdTimer?.cancel();
+    _tickTimer?.cancel();
+    if (mounted) {
+      setState(() {
+        _holding = false;
+        _holdProgress = 0;
+      });
+    } else {
+      _holding = false;
+      _holdProgress = 0;
+    }
+  }
+
+  Future<void> _showAdminDialog() async {
+    final p = context.read<AppProvider>();
+    final userCtrl = TextEditingController();
+    final passCtrl = TextEditingController();
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(p.isUrdu ? 'ایڈمن لاگ ان' : 'Admin Login'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: userCtrl,
+              decoration: InputDecoration(
+                labelText: p.t('usernameLbl'),
+                prefixIcon: const Icon(Icons.person_outline),
+                border:
+                    OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: passCtrl,
+              obscureText: true,
+              decoration: InputDecoration(
+                labelText: p.t('passwordLbl'),
+                prefixIcon: const Icon(Icons.lock_outline),
+                border:
+                    OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(p.isUrdu ? 'منسوخ' : 'Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () {
+              if (AdminConfig.verify(userCtrl.text, passCtrl.text)) {
+                Navigator.pop(ctx);
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) => const AdminPanelScreen()),
+                );
+              } else {
+                showSnack(ctx, p.t('wrongCredentials'));
+              }
+            },
+            child: Text(p.t('loginBtn')),
+          ),
+        ],
+      ),
+    );
+    userCtrl.dispose();
+    passCtrl.dispose();
+  }
+
+  // ---------------- User login ----------------
+
+  Future<void> _handleLogin() async {
+    if (_busy) return;
+    final p = context.read<AppProvider>();
+    final id = _idCtrl.text.trim();
+    final pass = _passCtrl.text;
+
+    if (id.isEmpty || pass.isEmpty) {
+      showSnack(context, p.t('fillAllFields'));
+      return;
+    }
+    if (pass.length < 6) {
+      showSnack(context, p.t('passwordTooShort'));
+      return;
+    }
+
+    setState(() => _busy = true);
+    try {
+      AppUserRecord? rec;
+      var offline = false;
+
+      // 1) Try online sign-in against Firestore.
+      try {
+        rec = await _firebase.loginUser(id, pass);
+      } on StateError catch (e) {
+        if (e.message == 'wrong') {
+          if (mounted) showSnack(context, p.t('wrongCredentials'));
+          return;
         }
-      } else {
-        await _firebase.signInWithEmail(email, pass);
-        if (mounted) {
-          showSnack(context, p.isUrdu ? 'کامیابی سے لاگ ان ہو گئے۔' : 'Signed in successfully.');
-          _proceedToApp();
+        if (e.message == 'inactive') {
+          if (mounted) showSnack(context, p.t('accountInactive'));
+          return;
+        }
+        if (e.message == 'firebase-not-configured') {
+          // 2) Offline fallback: this device's cached sign-in record.
+          final cached = await _firebase.loginUserCached(id, pass);
+          if (cached == null) {
+            if (mounted) showSnack(context, p.t('firebaseNotReady'));
+            return;
+          }
+          rec = cached;
+          offline = true;
+        } else {
+          if (mounted) showSnack(context, p.t('wrongCredentials'));
+          return;
+        }
+      } catch (_) {
+        // Network / FirebaseException etc.: try the on-device cache.
+        final cached = await _firebase.loginUserCached(id, pass);
+        if (cached == null) {
+          if (mounted) showSnack(context, p.t('wrongCredentials'));
+          return;
+        }
+        rec = cached;
+        offline = true;
+      }
+
+      if (offline && mounted) {
+        showSnack(
+          context,
+          p.isUrdu
+              ? 'آف لائن لاگ ان (اس موبائل کی محفوظ کاپی سے)'
+              : 'Offline sign-in (saved copy on this device)',
+        );
+      }
+
+      // 4) Bind (or create) the local business for this user.
+      final db = DatabaseHelper.instance;
+      var biz = await db.getBusinessByUsername(rec.username);
+      var justCreated = false;
+      int bizId;
+      if (biz == null) {
+        // First user on this device: bind the existing unbound business
+        // (e.g. the owner's own data) instead of starting empty.
+        final all = await db.getBusinesses();
+        for (final b in all) {
+          if (b.appUsername.isEmpty && b.id != null) {
+            biz = b;
+            break;
+          }
+        }
+        if (biz != null) {
+          await db.updateBusiness(Business(
+            id: biz.id,
+            name: rec.businessName.isEmpty ? biz.name : rec.businessName,
+            owner: biz.owner,
+            phone: biz.phone,
+            address: biz.address,
+            appUsername: rec.username,
+          ));
         }
       }
-    } catch (e) {
-      if (mounted) {
-        showSnack(context, 'Error: $e');
+      if (biz == null) {
+        bizId = await db.insertBusiness(Business(
+          name: rec.businessName.isEmpty ? rec.username : rec.businessName,
+          appUsername: rec.username,
+        ));
+        justCreated = true;
+      } else {
+        bizId = biz.id!;
+        if (rec.businessName.isNotEmpty && biz.name != rec.businessName) {
+          await db.updateBusiness(Business(
+            id: biz.id,
+            name: rec.businessName,
+            owner: biz.owner,
+            phone: biz.phone,
+            address: biz.address,
+            appUsername:
+                biz.appUsername.isEmpty ? rec.username : biz.appUsername,
+          ));
+        }
+      }
+
+      // 5) Cloud restore (fresh device) or push latest up (returning user).
+      if (_firebase.isConfigured) {
+        try {
+          if (justCreated) {
+            await _firebase.restoreUserData(rec.username, bizId);
+          } else {
+            final uname = rec.username;
+            unawaited(() async {
+              try {
+                await _firebase.syncUserData(uname, bizId);
+              } catch (_) {}
+            }());
+          }
+        } catch (_) {
+          // Sync problems must never block sign-in.
+        }
+      }
+
+      // 6) Establish the session — RootGate swaps in the app shell.
+      await p.signInSession(rec.username, bizId);
+      if (mounted && Navigator.canPop(context)) {
+        Navigator.pop(context);
       }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
+
+  // ---------------- UI ----------------
 
   @override
   Widget build(BuildContext context) {
     final p = context.watch<AppProvider>();
-    final isUrdu = p.isUrdu;
-    final primaryColor = Theme.of(context).primaryColor;
-
-    final currentGoogleUser = _drive.currentAccount;
-    final currentFirebaseUser = _firebase.currentUser;
 
     return Scaffold(
       backgroundColor: Colors.grey.shade50,
       appBar: widget.isStandalone
-          ? AppBar(title: Text(isUrdu ? 'اکاؤنٹ اور لاگ ان' : 'Account & Login'))
+          ? AppBar(title: Text(p.t('loginBtn')))
           : null,
       body: SafeArea(
         child: Center(
@@ -122,264 +321,132 @@ class _LoginScreenState extends State<LoginScreen> {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  // App Brand Logo & Title
+                  // Logo
                   Container(
-                    width: 80,
-                    height: 80,
+                    width: 84,
+                    height: 84,
                     decoration: BoxDecoration(
-                      color: primaryColor.withValues(alpha: 0.1),
+                      color: AppColors.primary.withValues(alpha: 0.1),
                       shape: BoxShape.circle,
                     ),
                     padding: const EdgeInsets.all(12),
-                    child: Image.asset('assets/icon/icon.png', fit: BoxFit.contain),
+                    child:
+                        Image.asset('assets/icon/icon.png', fit: BoxFit.contain),
                   ),
-                  const SizedBox(height: 12),
-                  Text(
-                    isUrdu ? 'نعمت آئل مل' : 'Namat Oil Mill',
-                    style: const TextStyle(
-                      fontSize: 26,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.black87,
-                    ),
-                  ),
-                  Text(
-                    isUrdu
-                        ? 'محفوظ کھاتہ و پروڈکشن کلاؤڈ سنک'
-                        : 'Business Khata & Production Management',
-                    style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
-                  ),
-                  const SizedBox(height: 28),
+                  const SizedBox(height: 16),
 
-                  // If user is already logged in, show status card
-                  if (currentGoogleUser != null || currentFirebaseUser != null) ...[
-                    Card(
-                      elevation: 2,
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16)),
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Column(
-                          children: [
-                            const Icon(Icons.check_circle,
-                                color: Colors.green, size: 48),
-                            const SizedBox(height: 8),
-                            Text(
-                              isUrdu ? 'لاگ ان فعال ہے' : 'Logged In',
-                              style: const TextStyle(
-                                  fontSize: 18, fontWeight: FontWeight.bold),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              currentGoogleUser?.email ??
-                                  currentFirebaseUser?.email ??
-                                  '',
-                              style: TextStyle(
-                                  color: Colors.grey.shade700, fontSize: 13),
-                            ),
-                            const SizedBox(height: 16),
-                            ElevatedButton(
-                              onPressed: _proceedToApp,
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: primaryColor,
-                                foregroundColor: Colors.white,
-                                minimumSize: const Size.fromHeight(44),
-                                shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(10)),
-                              ),
-                              child: Text(
-                                isUrdu ? 'کھاتہ کھولیں' : 'Open Khata',
-                                style: const TextStyle(fontSize: 15),
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            TextButton.icon(
-                              onPressed: () async {
-                                await _drive.signOut();
-                                await _firebase.signOut();
-                                setState(() {});
-                              },
-                              icon: const Icon(Icons.logout, size: 18),
-                              label: Text(isUrdu ? 'لاگ آؤٹ' : 'Log Out'),
-                            ),
-                          ],
-                        ),
+                  // "Welcome" — hidden admin hold target (15 seconds).
+                  Listener(
+                    onPointerDown: (_) => _startHold(),
+                    onPointerUp: (_) => _endHold(),
+                    onPointerCancel: (_) => _endHold(),
+                    child: Text(
+                      p.t('welcome'),
+                      style: const TextStyle(
+                        fontSize: 34,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.primary,
                       ),
                     ),
-                    const SizedBox(height: 20),
-                  ] else ...[
-                    // Google Sign-In 1-Tap Button
-                    Card(
-                      elevation: 1,
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14)),
-                      child: InkWell(
-                        onTap: _busy ? null : () => _handleGoogleSignIn(p),
-                        borderRadius: BorderRadius.circular(14),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 16, vertical: 14),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Image.network(
-                                'https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg',
-                                height: 22,
-                                width: 22,
-                                errorBuilder: (_, __, ___) => const Icon(
-                                    Icons.g_mobiledata,
-                                    size: 26,
-                                    color: Colors.blue),
-                              ),
-                              const SizedBox(width: 12),
-                              Text(
-                                isUrdu
-                                    ? 'Google اکاؤنٹ سے لاگ ان کریں'
-                                    : 'Sign in with Google',
-                                style: const TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w600,
-                                  color: Colors.black87,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
+                  ),
+                  const SizedBox(height: 6),
+
+                  // Hold progress (only while holding).
+                  if (_holding) ...[
+                    Text(
+                      p.t('keepHolding'),
+                      style: TextStyle(
+                          fontSize: 13, color: Colors.grey.shade700),
+                    ),
+                    const SizedBox(height: 6),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(6),
+                      child: LinearProgressIndicator(
+                        value: _holdProgress,
+                        minHeight: 6,
+                        backgroundColor: Colors.grey.shade300,
+                        valueColor: const AlwaysStoppedAnimation<Color>(
+                            AppColors.primary),
                       ),
                     ),
-                    const SizedBox(height: 18),
-
-                    // Divider
-                    Row(
-                      children: [
-                        Expanded(child: Divider(color: Colors.grey.shade300)),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                          child: Text(
-                            isUrdu ? 'یا ای میل سے' : 'or with Email',
-                            style: TextStyle(
-                                color: Colors.grey.shade500, fontSize: 12),
-                          ),
-                        ),
-                        Expanded(child: Divider(color: Colors.grey.shade300)),
-                      ],
-                    ),
-                    const SizedBox(height: 18),
-
-                    // Email & Password Fields Card
-                    Card(
-                      elevation: 2,
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16)),
-                      child: Padding(
-                        padding: const EdgeInsets.all(20),
-                        child: Column(
-                          children: [
-                            TextField(
-                              controller: _emailCtrl,
-                              keyboardType: TextInputType.emailAddress,
-                              decoration: InputDecoration(
-                                prefixIcon: const Icon(Icons.email_outlined),
-                                labelText: isUrdu ? 'ای میل ایڈریس' : 'Email Address',
-                                border: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(10)),
-                                contentPadding: const EdgeInsets.symmetric(
-                                    horizontal: 14, vertical: 12),
-                              ),
-                            ),
-                            const SizedBox(height: 14),
-                            TextField(
-                              controller: _passCtrl,
-                              obscureText: true,
-                              decoration: InputDecoration(
-                                prefixIcon: const Icon(Icons.lock_outline),
-                                labelText: isUrdu ? 'پاس ورڈ' : 'Password',
-                                border: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(10)),
-                                contentPadding: const EdgeInsets.symmetric(
-                                    horizontal: 14, vertical: 12),
-                              ),
-                            ),
-                            const SizedBox(height: 18),
-                            ElevatedButton(
-                              onPressed:
-                                  _busy ? null : () => _handleEmailAuth(p),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: primaryColor,
-                                foregroundColor: Colors.white,
-                                minimumSize: const Size.fromHeight(46),
-                                shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(10)),
-                              ),
-                              child: _busy
-                                  ? const SizedBox(
-                                      height: 20,
-                                      width: 20,
-                                      child: CircularProgressIndicator(
-                                          strokeWidth: 2, color: Colors.white),
-                                    )
-                                  : Text(
-                                      _isRegister
-                                          ? (isUrdu
-                                              ? 'نیا اکاؤنٹ بنائیں'
-                                              : 'Create Account')
-                                          : (isUrdu
-                                              ? 'لاگ ان کریں'
-                                              : 'Sign In'),
-                                      style: const TextStyle(
-                                          fontSize: 15,
-                                          fontWeight: FontWeight.bold),
-                                    ),
-                            ),
-                            const SizedBox(height: 8),
-                            TextButton(
-                              onPressed: () =>
-                                  setState(() => _isRegister = !_isRegister),
-                              child: Text(
-                                _isRegister
-                                    ? (isUrdu
-                                        ? 'پہلے سے اکاؤنٹ ہے؟ لاگ ان کریں'
-                                        : 'Already have an account? Sign In')
-                                    : (isUrdu
-                                        ? 'نیا اکاؤنٹ رجسٹر کریں'
-                                        : 'Need an account? Register'),
-                                style: TextStyle(
-                                    fontSize: 13, color: primaryColor),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
+                    const SizedBox(height: 6),
                   ],
-
-                  const SizedBox(height: 20),
-
-                  // Big Reassuring Offline Access Button
-                  OutlinedButton.icon(
-                    onPressed: _proceedToApp,
-                    icon: const Icon(Icons.offline_bolt_outlined, size: 20),
-                    label: Text(
-                      isUrdu
-                          ? 'بغیر انٹرنیٹ کھاتہ کھولیں (Offline)'
-                          : 'Continue Offline (No Internet Needed)',
-                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
-                    ),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: Colors.green.shade800,
-                      side: BorderSide(color: Colors.green.shade400, width: 1.5),
-                      minimumSize: const Size.fromHeight(46),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12)),
-                      backgroundColor: Colors.green.shade50,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
                   Text(
-                    isUrdu
-                        ? 'آف لائن ڈیٹا ہمیشہ آپ کے موبائل میں محفوظ رہتا ہے۔'
-                        : 'Offline data is always safely stored on this device.',
+                    p.t('holdWelcomeHint'),
                     textAlign: TextAlign.center,
                     style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    p.t('loginSubtitle'),
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
+                  ),
+                  const SizedBox(height: 24),
+
+                  // Login card
+                  Card(
+                    elevation: 2,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16)),
+                    child: Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        children: [
+                          TextField(
+                            controller: _idCtrl,
+                            textInputAction: TextInputAction.next,
+                            decoration: InputDecoration(
+                              prefixIcon: const Icon(Icons.person_outline),
+                              labelText: p.t('loginIdHint'),
+                              border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(10)),
+                              contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 14, vertical: 12),
+                            ),
+                          ),
+                          const SizedBox(height: 14),
+                          TextField(
+                            controller: _passCtrl,
+                            obscureText: true,
+                            textInputAction: TextInputAction.done,
+                            onSubmitted: (_) => _handleLogin(),
+                            decoration: InputDecoration(
+                              prefixIcon: const Icon(Icons.lock_outline),
+                              labelText: p.t('passwordLbl'),
+                              border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(10)),
+                              contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 14, vertical: 12),
+                            ),
+                          ),
+                          const SizedBox(height: 18),
+                          ElevatedButton(
+                            onPressed: _busy ? null : _handleLogin,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppColors.primary,
+                              foregroundColor: Colors.white,
+                              minimumSize: const Size.fromHeight(48),
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10)),
+                            ),
+                            child: _busy
+                                ? const SizedBox(
+                                    height: 20,
+                                    width: 20,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2, color: Colors.white),
+                                  )
+                                : Text(
+                                    p.t('loginBtn'),
+                                    style: const TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.bold),
+                                  ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
                 ],
               ),
@@ -390,4 +457,3 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 }
-

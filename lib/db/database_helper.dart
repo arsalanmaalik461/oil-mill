@@ -18,7 +18,7 @@ class DatabaseHelper {
     final dir = await getDatabasesPath();
     return openDatabase(
       p.join(dir, 'namat_oil_mill.db'),
-      version: 4,
+      version: 5,
       onUpgrade: (d, oldVersion, newVersion) async {
         if (oldVersion < 2) {
           // v2: track when a payment reminder was last sent to each party.
@@ -48,10 +48,16 @@ class DatabaseHelper {
             id INTEGER PRIMARY KEY AUTOINCREMENT, batch_id INTEGER, category TEXT,
             amount REAL, note TEXT, date_time TEXT)''');
         }
+        if (oldVersion < 5) {
+          // v5: per-user data isolation — a business can be bound to one
+          // app login username (Firebase app_users record).
+          await d.execute(
+              "ALTER TABLE businesses ADD COLUMN app_username TEXT DEFAULT ''");
+        }
       },
       onCreate: (d, v) async {
         await d.execute('''CREATE TABLE businesses(
-          id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, owner TEXT, phone TEXT, address TEXT)''');
+          id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, owner TEXT, phone TEXT, address TEXT, app_username TEXT DEFAULT '')''');
         await d.execute('''CREATE TABLE parties(
           id INTEGER PRIMARY KEY AUTOINCREMENT, business_id INTEGER, type TEXT, name TEXT,
           phone TEXT, address TEXT, opening_balance REAL DEFAULT 0, deleted INTEGER DEFAULT 0,
@@ -905,5 +911,113 @@ class DatabaseHelper {
         }
       }
     });
+  }
+
+  // ---------------- Per-user (Firebase) data sync ----------------
+  static const _bizTables = [
+    'parties', 'cash_entries', 'items', 'bills', 'staff', 'bank_accounts',
+    'expenses', 'wallet_transactions', 'qr_payments', 'production_batches',
+  ];
+  static const _childTables = <String, String>{
+    'party_transactions': 'parties',
+    'stock_transactions': 'items',
+    'bill_items': 'bills',
+    'attendance': 'staff',
+    'salary_payments': 'staff',
+    'bank_transactions': 'bank_accounts',
+    'production_inputs': 'production_batches',
+    'production_outputs': 'production_batches',
+    'production_expenses': 'production_batches',
+  };
+  static String _fkOf(String child) => switch (child) {
+        'party_transactions' => 'party_id',
+        'stock_transactions' => 'item_id',
+        'bill_items' => 'bill_id',
+        'attendance' || 'salary_payments' => 'staff_id',
+        'bank_transactions' => 'bank_id',
+        _ => 'batch_id',
+      };
+
+  /// All data belonging to ONE business, as a JSON-safe map
+  /// (same shape as [exportJson] but business-scoped).
+  Future<Map<String, dynamic>> exportBusinessData(int bizId) async {
+    final d = await db;
+    final out = <String, dynamic>{'app': 'namat_oil_mill', 'version': 1};
+    out['businesses'] =
+        await d.query('businesses', where: 'id = ?', whereArgs: [bizId]);
+    final parentIds = <String, List<int>>{};
+    for (final t in _bizTables) {
+      final rows =
+          await d.query(t, where: 'business_id = ?', whereArgs: [bizId]);
+      out[t] = rows;
+      parentIds[t] = rows.map((r) => r['id'] as int).toList();
+    }
+    for (final e in _childTables.entries) {
+      final ids = parentIds[e.value] ?? const [];
+      if (ids.isEmpty) {
+        out[e.key] = const [];
+      } else {
+        final marks = List.filled(ids.length, '?').join(',');
+        out[e.key] = await d.query(e.key,
+            where: '${_fkOf(e.key)} IN ($marks)', whereArgs: ids);
+      }
+    }
+    return out;
+  }
+
+  /// Replaces ALL local data of business [bizId] with [data] (from
+  /// [exportBusinessData] of the same business on any device). Other
+  /// businesses on this device are untouched. Row ids are preserved.
+  Future<void> importBusinessData(int bizId, Map<String, dynamic> data) async {
+    if (data['app'] != 'namat_oil_mill') {
+      throw const FormatException('Not a Namat Oil Mill backup');
+    }
+    final d = await db;
+    await d.transaction((txn) async {
+      // Collect current scoped parent ids, then delete children first.
+      final parentIds = <String, List<int>>{};
+      for (final t in _bizTables) {
+        final rows = await txn.query(t,
+            columns: ['id'], where: 'business_id = ?', whereArgs: [bizId]);
+        parentIds[t] = rows.map((r) => r['id'] as int).toList();
+      }
+      for (final e in _childTables.entries) {
+        final ids = parentIds[e.value] ?? const [];
+        if (ids.isNotEmpty) {
+          final marks = List.filled(ids.length, '?').join(',');
+          await txn.delete(e.key,
+              where: '${_fkOf(e.key)} IN ($marks)', whereArgs: ids);
+        }
+      }
+      for (final t in _bizTables) {
+        await txn.delete(t, where: 'business_id = ?', whereArgs: [bizId]);
+      }
+      // Insert in parent-before-child order.
+      for (final t in allTables) {
+        if (t == 'businesses') continue;
+        final rows = (data[t] as List?) ?? const [];
+        for (final row in rows) {
+          await txn.insert(t, Map<String, dynamic>.from(row as Map),
+              conflictAlgorithm: t == 'attendance'
+                  ? ConflictAlgorithm.replace
+                  : ConflictAlgorithm.ignore);
+        }
+      }
+      // Refresh the business profile itself (never its id / binding).
+      final bizRows = (data['businesses'] as List?) ?? const [];
+      if (bizRows.isNotEmpty) {
+        final b = Map<String, dynamic>.from(bizRows.first as Map)
+          ..remove('id')
+          ..remove('app_username');
+        await txn.update('businesses', b, where: 'id = ?', whereArgs: [bizId]);
+      }
+    });
+  }
+
+  Future<Business?> getBusinessByUsername(String username) async {
+    final d = await db;
+    final rows = await d.query('businesses',
+        where: 'app_username = ?', whereArgs: [username], limit: 1);
+    return rows.isEmpty ? null : Business.fromMap(rows.first);
   }
 }

@@ -5,6 +5,7 @@ import 'services/firebase_service.dart';
 import 'theme/app_theme.dart';
 import 'utils/google_drive_service.dart';
 import 'screens/lock_screen.dart';
+import 'screens/login_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/digicash_screen.dart';
 import 'screens/more_screen.dart';
@@ -54,6 +55,11 @@ class _RootGateState extends State<RootGate> {
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<AppProvider>();
+    // 1) App-user sign-in (Firebase app_users) comes first.
+    if (!provider.isLoggedIn) {
+      return const LoginScreen();
+    }
+    // 2) Then the optional device PIN / fingerprint lock.
     if (provider.pinEnabled && !_unlocked) {
       return LockScreen(onUnlocked: () => setState(() => _unlocked = true));
     }

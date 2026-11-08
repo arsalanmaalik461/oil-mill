@@ -5,14 +5,19 @@ class Business {
   final String owner;
   final String phone;
   final String address;
-  Business({this.id, required this.name, this.owner = '', this.phone = '', this.address = ''});
+
+  /// Login username this business belongs to (per-user data isolation).
+  final String appUsername;
+  Business({this.id, required this.name, this.owner = '', this.phone = '', this.address = '', this.appUsername = ''});
   Map<String, dynamic> toMap() => {
         if (id != null) 'id': id,
         'name': name, 'owner': owner, 'phone': phone, 'address': address,
+        'app_username': appUsername,
       };
   factory Business.fromMap(Map<String, dynamic> m) => Business(
         id: m['id'] as int?, name: m['name'] ?? '', owner: m['owner'] ?? '',
         phone: m['phone'] ?? '', address: m['address'] ?? '',
+        appUsername: (m['app_username'] as String?) ?? '',
       );
 }
 
