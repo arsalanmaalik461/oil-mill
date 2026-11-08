@@ -10,12 +10,14 @@ class AppProvider extends ChangeNotifier {
   bool _pinEnabled = false;
   bool _fingerprintEnabled = false;
   int _tick = 0; // bump to force data screens to reload
+  bool _loaded = false;
 
   String get lang => _lang;
   bool get isUrdu => _lang == 'ur';
   int get businessId => _businessId;
   String get sessionUsername => _sessionUsername;
   bool get isLoggedIn => _sessionUsername.isNotEmpty;
+  bool get loaded => _loaded;
   bool get pinEnabled => _pinEnabled;
   bool get fingerprintEnabled => _fingerprintEnabled;
   int get tick => _tick;
@@ -30,6 +32,7 @@ class AppProvider extends ChangeNotifier {
     _pinEnabled = prefs.getString('pin_hash') != null;
     _sessionUsername = prefs.getString('session_username') ?? '';
     _fingerprintEnabled = prefs.getBool('fingerprint_enabled') ?? false;
+    _loaded = true;
     notifyListeners();
   }
 

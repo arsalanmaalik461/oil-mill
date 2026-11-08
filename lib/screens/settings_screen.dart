@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:crypto/crypto.dart';
@@ -5,6 +6,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:intl/intl.dart';
+import 'package:local_auth/local_auth.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -48,6 +50,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _googleBusy = false;
   bool _autoDriveBackup = true;
   bool _accountBusy = false;
+  bool _syncBusy = false;
+  bool _restoreBusy = false;
   final _firebase = FirebaseService.instance;
 
   @override
@@ -476,29 +480,42 @@ class _SettingsScreenState extends State<SettingsScreen> {
   /// own Firebase area (users/{username}/businesses/{id}).
   Future<void> _syncMyData(AppProvider p) async {
     if (_accountBusy) return;
-    setState(() => _accountBusy = true);
+    setState(() {
+      _accountBusy = true;
+      _syncBusy = true;
+    });
     try {
       if (!_firebase.isConfigured) {
         showSnack(context, p.t('firebaseNotSetup'));
         return;
       }
-      final count =
-          await _firebase.syncUserData(p.sessionUsername, p.businessId);
+      final count = await _firebase
+          .syncUserData(p.sessionUsername, p.businessId)
+          .timeout(const Duration(seconds: 45));
       if (!mounted) return;
       showSnack(context, '${p.t('syncDone')} ($count)');
+    } on TimeoutException {
+      if (!mounted) return;
+      showSnack(context,
+          'Taking too long. Check your internet and try again.');
     } on StateError catch (e) {
       if (!mounted) return;
       showSnack(
         context,
         e.message == 'firebase-not-configured'
             ? p.t('firebaseNotSetup')
-            : 'Firebase Error: $e',
+            : 'Error: $e',
       );
     } catch (e) {
       if (!mounted) return;
-      showSnack(context, 'Firebase Error: $e');
+      showSnack(context, 'Error: $e');
     } finally {
-      if (mounted) setState(() => _accountBusy = false);
+      if (mounted) {
+        setState(() {
+          _accountBusy = false;
+          _syncBusy = false;
+        });
+      }
     }
   }
 
@@ -521,39 +538,52 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
     );
     if (proceed != true || !mounted) return;
-    setState(() => _accountBusy = true);
+    setState(() {
+      _accountBusy = true;
+      _restoreBusy = true;
+    });
     try {
       if (!_firebase.isConfigured) {
         showSnack(context, p.t('firebaseNotSetup'));
         return;
       }
-      final count =
-          await _firebase.restoreUserData(p.sessionUsername, p.businessId);
+      final count = await _firebase
+          .restoreUserData(p.sessionUsername, p.businessId)
+          .timeout(const Duration(seconds: 45));
       if (!mounted) return;
       if (count == 0) {
         showSnack(
           context,
           p.isUrdu
-              ? 'فائر بیس میں کوئی بیک اپ نہیں ملا۔'
-              : 'No backup found in Firebase.',
+              ? 'کلاؤڈ میں کوئی بیک اپ نہیں ملا۔'
+              : 'No backup found in the cloud.',
         );
       } else {
         showSnack(context, '${p.t('restoreDone')} ($count)');
         p.bump();
       }
+    } on TimeoutException {
+      if (!mounted) return;
+      showSnack(context,
+          'Taking too long. Check your internet and try again.');
     } on StateError catch (e) {
       if (!mounted) return;
       showSnack(
         context,
         e.message == 'firebase-not-configured'
             ? p.t('firebaseNotSetup')
-            : 'Firebase Error: $e',
+            : 'Error: $e',
       );
     } catch (e) {
       if (!mounted) return;
-      showSnack(context, 'Firebase Error: $e');
+      showSnack(context, 'Error: $e');
     } finally {
-      if (mounted) setState(() => _accountBusy = false);
+      if (mounted) {
+        setState(() {
+          _accountBusy = false;
+          _restoreBusy = false;
+        });
+      }
     }
   }
 
@@ -636,6 +666,51 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await p.signOutSession();
   }
 
+  /// Fingerprint unlock can be enabled on its own (no PIN required):
+  /// the phone must support biometrics and have a fingerprint enrolled;
+  /// the user confirms with a live fingerprint scan before it turns ON.
+  Future<void> _onFingerprintToggle(AppProvider p, bool v) async {
+    if (!v) {
+      await p.setFingerprintEnabled(false);
+      return;
+    }
+    final auth = LocalAuthentication();
+    var supported = false;
+    try {
+      supported =
+          await auth.canCheckBiometrics || await auth.isDeviceSupported();
+    } catch (_) {}
+    if (!supported) {
+      if (mounted) {
+        showSnack(context, 'This phone does not support fingerprint unlock.');
+      }
+      return;
+    }
+    List<BiometricType> enrolled = const [];
+    try {
+      enrolled = await auth.getAvailableBiometrics();
+    } catch (_) {}
+    if (enrolled.isEmpty) {
+      if (mounted) {
+        showSnack(context,
+            'No fingerprint is set on this phone. Add one in phone Settings first.');
+      }
+      return;
+    }
+    try {
+      final ok = await auth.authenticate(
+        localizedReason: 'Confirm your fingerprint to turn ON fingerprint unlock',
+        options: const AuthenticationOptions(biometricOnly: true),
+      );
+      if (ok) {
+        await p.setFingerprintEnabled(true);
+        if (mounted) showSnack(context, 'Fingerprint unlock is ON.');
+      }
+    } catch (_) {
+      if (mounted) showSnack(context, 'Fingerprint check failed. Try again.');
+    }
+  }
+
   // ---------------- Build ----------------
 
   @override
@@ -697,7 +772,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     leading: const Icon(Icons.cloud_upload,
                         color: AppColors.primary),
                     title: Text(p.t('syncMyData')),
-                    trailing: _accountBusy
+                    trailing: _syncBusy
                         ? const SizedBox(
                             width: 22,
                             height: 22,
@@ -710,7 +785,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     leading: const Icon(Icons.cloud_download,
                         color: AppColors.primary),
                     title: Text(p.t('restoreMyData')),
-                    trailing: _accountBusy
+                    trailing: _restoreBusy
                         ? const SizedBox(
                             width: 22,
                             height: 22,
@@ -818,7 +893,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   secondary: const Icon(Icons.fingerprint, color: AppColors.primary),
                   title: Text(p.t('fingerprint')),
                   value: p.fingerprintEnabled,
-                  onChanged: _pinSet ? (v) => p.setFingerprintEnabled(v) : null,
+                  onChanged: (v) => _onFingerprintToggle(p, v),
                 ),
               ],
             ),

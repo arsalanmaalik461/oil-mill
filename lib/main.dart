@@ -55,12 +55,16 @@ class _RootGateState extends State<RootGate> {
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<AppProvider>();
+    if (!provider.loaded) {
+      return const Scaffold(
+          body: Center(child: CircularProgressIndicator()));
+    }
     // 1) App-user sign-in (Firebase app_users) comes first.
     if (!provider.isLoggedIn) {
       return const LoginScreen();
     }
     // 2) Then the optional device PIN / fingerprint lock.
-    if (provider.pinEnabled && !_unlocked) {
+    if ((provider.pinEnabled || provider.fingerprintEnabled) && !_unlocked) {
       return LockScreen(onUnlocked: () => setState(() => _unlocked = true));
     }
     return const MainShell();

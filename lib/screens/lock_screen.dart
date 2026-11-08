@@ -35,7 +35,7 @@ class _LockScreenState extends State<LockScreen> {
     final hash = prefs.getString('pin_hash');
     final fp = prefs.getBool('fingerprint_enabled') ?? false;
     if (!mounted) return;
-    if (hash == null) {
+    if (hash == null && !fp) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) widget.onUnlocked();
       });
@@ -113,6 +113,58 @@ class _LockScreenState extends State<LockScreen> {
     if (!_ready) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
+    if (_pinHash == null) {
+      // Fingerprint-only lock (fingerprint ON, no PIN set): the app opens
+      // directly with a fingerprint touch — no password typing.
+      return Scaffold(
+        body: SafeArea(
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 92,
+                    height: 92,
+                    decoration: const BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: AppColors.headerGradient,
+                    ),
+                    child: const Icon(Icons.fingerprint,
+                        size: 46, color: Colors.white),
+                  ),
+                  const SizedBox(height: 14),
+                  Text(
+                    p.t('appName'),
+                    style: const TextStyle(
+                        fontSize: 19,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.primary),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Unlock with your fingerprint',
+                    style: TextStyle(color: AppColors.textGrey),
+                  ),
+                  const SizedBox(height: 24),
+                  ElevatedButton.icon(
+                    onPressed: _tryBiometric,
+                    icon: const Icon(Icons.fingerprint),
+                    label: Text(p.t('fingerprint')),
+                  ),
+                  const SizedBox(height: 6),
+                  TextButton(
+                    onPressed: () => p.signOutSession(),
+                    child: const Text('Sign in with password'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
     const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'back'];
     return Scaffold(
       body: SafeArea(
@@ -134,7 +186,10 @@ class _LockScreenState extends State<LockScreen> {
                 const SizedBox(height: 14),
                 Text(
                   p.t('appName'),
-                  style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w700),
+                  style: const TextStyle(
+                      fontSize: 19,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.primary),
                 ),
                 const SizedBox(height: 22),
                 Text(

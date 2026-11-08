@@ -52,7 +52,7 @@ Future<void> shareLedgerPdf({
     running += t.type == 'udhaar' ? t.amount : -t.amount;
     rows.add([
       _df.format(t.dateTime),
-      t.type == 'udhaar' ? 'Udhaar (Gave)' : 'Wasool (Got)',
+      t.type == 'udhaar' ? 'You Gave' : 'You Got',
       t.note,
       formatRs(t.amount),
       formatRs(running),
@@ -231,7 +231,7 @@ Future<Uint8List> buildFullLedgerPdfBytes({
       running += t.type == 'udhaar' ? t.amount : -t.amount;
       rows.add([
         _df.format(t.dateTime),
-        t.type == 'udhaar' ? 'Udhaar (Gave)' : 'Wasool (Got)',
+        t.type == 'udhaar' ? 'You Gave' : 'You Got',
         t.note,
         formatRs(t.amount),
         formatRs(running),

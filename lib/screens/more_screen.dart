@@ -195,6 +195,34 @@ class MoreScreen extends StatelessWidget {
                     },
                   ),
                   const SizedBox(height: 16),
+                  Card(
+                    child: ListTile(
+                      leading: const Icon(Icons.logout, color: Colors.red),
+                      title: Text(
+                        p.t('logoutBtn'),
+                        style: const TextStyle(
+                            color: Colors.red, fontWeight: FontWeight.w600),
+                      ),
+                      onTap: () async {
+                        final ok = await showDialog<bool>(
+                          context: context,
+                          builder: (c) => AlertDialog(
+                            content: Text(p.t('logoutConfirm')),
+                            actions: [
+                              TextButton(
+                                  onPressed: () => Navigator.pop(c, false),
+                                  child: Text(p.t('cancel'))),
+                              TextButton(
+                                  onPressed: () => Navigator.pop(c, true),
+                                  child: Text(p.t('logoutBtn'))),
+                            ],
+                          ),
+                        );
+                        if (ok == true) await p.signOutSession();
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 10),
                   _NoteCard(icon: Icons.people_alt, text: p.t('permissionsNote')),
                   const SizedBox(height: 10),
                   _NoteCard(icon: Icons.cloud_outlined, text: p.t('cloudNote')),

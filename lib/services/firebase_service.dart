@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:crypto/crypto.dart';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -246,6 +247,11 @@ class AppUserRecord {
 }
 
 extension FirebaseUsers on FirebaseService {
+  /// Legacy records (created by older builds) stored only this salted
+  /// hash; accepted once at sign-in and upgraded to plain text.
+  static String _hashPw(String password, String salt) =>
+      sha256.convert(utf8.encode('$salt:$password')).toString();
+
   CollectionReference<Map<String, dynamic>> get _users =>
       firestore!.collection('app_users');
 
@@ -273,7 +279,13 @@ extension FirebaseUsers on FirebaseService {
     if (doc['active'] == false) throw StateError('inactive');
     final username = doc['id'] as String;
     if ((doc['password'] as String?) != password) {
-      throw StateError('wrong');
+      final legacy = doc['password_hash'] == _hashPw(password, username);
+      if (!legacy) throw StateError('wrong');
+      // Upgrade the legacy hashed record to plain text (owner's choice).
+      await _users.doc(username).update({
+        'password': password,
+        'password_hash': FieldValue.delete(),
+      });
     }
     final rec = AppUserRecord(
       username: username,
@@ -324,7 +336,10 @@ extension FirebaseUsers on FirebaseService {
 
   Future<void> setUserPassword(String username, String newPassword) async {
     if (!isConfigured) throw StateError('firebase-not-configured');
-    await _users.doc(username).update({'password': newPassword});
+    await _users.doc(username).update({
+      'password': newPassword,
+      'password_hash': FieldValue.delete(),
+    });
   }
 
   Future<void> setUserActive(String username, bool active) async {
@@ -342,7 +357,8 @@ extension FirebaseUsers on FirebaseService {
       String username, String oldPassword, String newPassword) async {
     final doc = await _findUserDoc(username);
     if (doc == null) throw StateError('wrong');
-    if ((doc['password'] as String?) != oldPassword) {
+    if ((doc['password'] as String?) != oldPassword &&
+        doc['password_hash'] != _hashPw(oldPassword, username)) {
       throw StateError('wrong');
     }
     await setUserPassword(username, newPassword);
@@ -387,7 +403,8 @@ extension FirebaseUsers on FirebaseService {
     for (final e in cached.entries) {
       final v = Map<String, dynamic>.from(e.value as Map);
       if (e.key == id || v['email'] == identifier.trim() || v['phone'] == identifier.trim()) {
-        if (v['password'] == password) {
+        if (v['password'] == password ||
+            v['password_hash'] == _hashPw(password, e.key)) {
           return AppUserRecord(
             username: e.key,
             businessName: (v['business_name'] as String?) ?? '',

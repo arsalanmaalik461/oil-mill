@@ -69,6 +69,44 @@ class _PartyDetailScreenState extends State<PartyDetailScreen> {
     return map;
   }
 
+  /// One of the two summary boxes on the party ledger header.
+  Widget _sumBox(String label, double amount,
+      {required bool isGreen, required IconData icon}) {
+    final color = isGreen ? AppColors.green : AppColors.red;
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
+      ),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, size: 16, color: color),
+              const SizedBox(width: 5),
+              Flexible(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      color: color,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13.5),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 5),
+          AmountText(amount, positiveIsGreen: isGreen, fontSize: 19),
+        ],
+      ),
+    );
+  }
+
   String _reminderText(Party party, double balance, String businessName) {
     if (balance > 0) {
       return 'Dear ${party.name}, your outstanding balance at $businessName '
@@ -272,6 +310,17 @@ class _PartyDetailScreenState extends State<PartyDetailScreen> {
           final party = data.party;
           final balance = data.balance;
           final running = _runningBalances(data);
+          var totalGave =
+              party.openingBalance > 0 ? party.openingBalance : 0.0;
+          var totalGot =
+              party.openingBalance < 0 ? -party.openingBalance : 0.0;
+          for (final t in data.transactions) {
+            if (t.type == 'udhaar') {
+              totalGave += t.amount;
+            } else {
+              totalGot += t.amount;
+            }
+          }
           return Column(
             children: [
               Card(
@@ -280,18 +329,40 @@ class _PartyDetailScreenState extends State<PartyDetailScreen> {
                   padding: const EdgeInsets.all(16),
                   child: Column(
                     children: [
-                      Text(p.t('balance'),
-                          style: const TextStyle(color: AppColors.textGrey)),
-                      const SizedBox(height: 4),
-                      AmountText(balance,
-                          positiveIsGreen: false, fontSize: 27),
-                      if (balance != 0) ...[
-                        const SizedBox(height: 2),
-                        Text(
-                          balance > 0 ? p.t('youWillGet') : p.t('youWillGive'),
-                          style: const TextStyle(color: AppColors.textGrey),
-                        ),
-                      ],
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _sumBox(p.t('udhaar'), totalGave,
+                                isGreen: false, icon: Icons.arrow_upward),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: _sumBox(p.t('wasool'), totalGot,
+                                isGreen: true, icon: Icons.arrow_downward),
+                          ),
+                        ],
+                      ),
+                      const Divider(height: 24),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text('${p.t('balance')}: ',
+                              style: const TextStyle(
+                                  color: AppColors.textGrey, fontSize: 15)),
+                          AmountText(balance,
+                              positiveIsGreen: false, fontSize: 19),
+                          if (balance != 0) ...[
+                            const SizedBox(width: 6),
+                            Text(
+                              balance > 0
+                                  ? '(${p.t('youWillGet')})'
+                                  : '(${p.t('youWillGive')})',
+                              style: const TextStyle(
+                                  color: AppColors.textGrey, fontSize: 13),
+                            ),
+                          ],
+                        ],
+                      ),
                     ],
                   ),
                 ),

@@ -19,7 +19,7 @@ import 'admin_panel_screen.dart';
 /// [FirebaseService]. There is no self-registration.
 ///
 /// Hidden admin access: pressing and holding the "Welcome" heading for
-/// 15 seconds opens the admin sign-in dialog.
+/// 8 seconds opens the admin sign-in dialog.
 class LoginScreen extends StatefulWidget {
   final bool isStandalone;
   const LoginScreen({super.key, this.isStandalone = false});
@@ -33,7 +33,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _passCtrl = TextEditingController();
   bool _busy = false;
 
-  // --- 15-second hold on "Welcome" (hidden admin access) ---
+  // --- 8-second hold on "Welcome" (hidden admin access) ---
   Timer? _holdTimer;
 
   final _firebase = FirebaseService.instance;
@@ -50,13 +50,13 @@ class _LoginScreenState extends State<LoginScreen> {
 
   void _startHold() {
     _holdTimer?.cancel();
-    _holdTimer = Timer(const Duration(seconds: 15), () {
+    _holdTimer = Timer(const Duration(seconds: 8), () {
       if (mounted) _showAdminDialog();
     });
   }
 
   void _endHold() {
-    // Released / cancelled before 15 seconds: cancel timer silently.
+    // Released / cancelled before 8 seconds: cancel silently (no hint shown).
     _holdTimer?.cancel();
     _holdTimer = null;
   }
@@ -300,8 +300,17 @@ class _LoginScreenState extends State<LoginScreen> {
                         Image.asset('assets/icon/icon.png', fit: BoxFit.contain),
                   ),
                   const SizedBox(height: 16),
+                  Text(
+                    p.t('appName'),
+                    style: const TextStyle(
+                      fontSize: 21,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.primary,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
 
-                  // "Welcome" — hidden admin hold target (15 seconds).
+                  // "Welcome" — hidden admin hold target (8 seconds).
                   Listener(
                     onPointerDown: (_) => _startHold(),
                     onPointerUp: (_) => _endHold(),
