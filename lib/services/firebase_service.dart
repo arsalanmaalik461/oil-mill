@@ -1,7 +1,6 @@
 import 'dart:convert';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:crypto/crypto.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -228,10 +227,9 @@ class FirebaseService {
 
 /// One app-user record (Firestore collection `app_users`, doc id = username).
 /// Created ONLY by the app admin; the user signs in with username, email or
-/// phone + password. Passwords are stored as salted SHA-256 hashes. If the
-/// owner sets a `password_reset_plain` field on the doc from the Firebase
-/// Console, the next sign-in with that password succeeds once and the field
-/// is replaced by a hash.
+/// phone + password. Passwords are stored in plain text in the `password`
+/// field (owner's explicit choice, 2026-11-08) so the owner can view or
+/// change any user's password directly from the Firebase Console.
 class AppUserRecord {
   final String username;
   final String businessName;
@@ -248,9 +246,6 @@ class AppUserRecord {
 }
 
 extension FirebaseUsers on FirebaseService {
-  static String _hashPw(String password, String salt) =>
-      sha256.convert(utf8.encode('$salt:$password')).toString();
-
   CollectionReference<Map<String, dynamic>> get _users =>
       firestore!.collection('app_users');
 
@@ -277,23 +272,16 @@ extension FirebaseUsers on FirebaseService {
     if (doc == null) throw StateError('wrong');
     if (doc['active'] == false) throw StateError('inactive');
     final username = doc['id'] as String;
-    bool ok = doc['password_hash'] == _hashPw(password, username);
-    if (!ok && (doc['password_reset_plain'] as String?) == password) {
-      // One-time plain reset set from the Firebase Console: upgrade to hash.
-      await _users.doc(username).update({
-        'password_hash': _hashPw(password, username),
-        'password_reset_plain': FieldValue.delete(),
-      });
-      ok = true;
+    if ((doc['password'] as String?) != password) {
+      throw StateError('wrong');
     }
-    if (!ok) throw StateError('wrong');
     final rec = AppUserRecord(
       username: username,
       businessName: (doc['business_name'] as String?) ?? '',
       email: (doc['email'] as String?) ?? '',
       phone: (doc['phone'] as String?) ?? '',
     );
-    await cacheLogin(rec, _hashPw(password, username));
+    await cacheLogin(rec, password);
     return rec;
   }
 
@@ -312,7 +300,7 @@ extension FirebaseUsers on FirebaseService {
       'business_name': businessName.trim(),
       'email': email.trim(),
       'phone': phone.trim(),
-      'password_hash': _hashPw(password, uname),
+      'password': password,
       'active': true,
       'created_at': FieldValue.serverTimestamp(),
     });
@@ -336,10 +324,7 @@ extension FirebaseUsers on FirebaseService {
 
   Future<void> setUserPassword(String username, String newPassword) async {
     if (!isConfigured) throw StateError('firebase-not-configured');
-    await _users.doc(username).update({
-      'password_hash': _hashPw(newPassword, username),
-      'password_reset_plain': FieldValue.delete(),
-    });
+    await _users.doc(username).update({'password': newPassword});
   }
 
   Future<void> setUserActive(String username, bool active) async {
@@ -357,14 +342,13 @@ extension FirebaseUsers on FirebaseService {
       String username, String oldPassword, String newPassword) async {
     final doc = await _findUserDoc(username);
     if (doc == null) throw StateError('wrong');
-    if (doc['password_hash'] != _hashPw(oldPassword, username) &&
-        (doc['password_reset_plain'] as String?) != oldPassword) {
+    if ((doc['password'] as String?) != oldPassword) {
       throw StateError('wrong');
     }
     await setUserPassword(username, newPassword);
     final cached = await _cachedUsers();
     if (cached.containsKey(username)) {
-      cached[username]['password_hash'] = _hashPw(newPassword, username);
+      cached[username]['password'] = newPassword;
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('cached_users', jsonEncode(cached));
     }
@@ -382,13 +366,13 @@ extension FirebaseUsers on FirebaseService {
     }
   }
 
-  Future<void> cacheLogin(AppUserRecord rec, String passwordHash) async {
+  Future<void> cacheLogin(AppUserRecord rec, String password) async {
     final cached = await _cachedUsers();
     cached[rec.username] = {
       'business_name': rec.businessName,
       'email': rec.email,
       'phone': rec.phone,
-      'password_hash': passwordHash,
+      'password': password,
     };
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('cached_users', jsonEncode(cached));
@@ -403,7 +387,7 @@ extension FirebaseUsers on FirebaseService {
     for (final e in cached.entries) {
       final v = Map<String, dynamic>.from(e.value as Map);
       if (e.key == id || v['email'] == identifier.trim() || v['phone'] == identifier.trim()) {
-        if (v['password_hash'] == _hashPw(password, e.key)) {
+        if (v['password'] == password) {
           return AppUserRecord(
             username: e.key,
             businessName: (v['business_name'] as String?) ?? '',

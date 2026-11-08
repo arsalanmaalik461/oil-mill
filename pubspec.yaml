@@ -25,6 +25,7 @@ dependencies:
   qr_flutter: ^4.1.0
   crypto: ^3.0.3
   file_picker: ^8.0.3
+  flutter_contacts: ^1.1.9+2
   google_sign_in: ^6.2.1
   googleapis: ^13.2.0
   extension_google_sign_in_as_googleapis_auth: ^2.0.11

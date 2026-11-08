@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_contacts/flutter_contacts.dart';
 import 'package:provider/provider.dart';
 
 import '../db/database_helper.dart';
@@ -28,6 +29,63 @@ class _PartyFormScreenState extends State<PartyFormScreen> {
   String _openingKind = 'get'; // 'get' = you will get (positive) | 'give'
 
   bool get _editing => widget.party != null;
+
+  /// Pick a number from the phone's contact list and fill the phone field
+  /// (and the name too, when it is still empty).
+  Future<void> _pickContact() async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final granted = await FlutterContacts.requestPermission(readonly: true);
+      if (!granted) {
+        messenger.showSnackBar(const SnackBar(
+            content: Text('Contacts permission denied — number not picked.')));
+        return;
+      }
+      final contacts = await FlutterContacts.getContacts(withProperties: true);
+      final entries = <(String, String)>[]; // (name, number)
+      for (final c in contacts) {
+        for (final ph in c.phones) {
+          if (ph.number.trim().isNotEmpty) {
+            entries.add((c.displayName, ph.number.trim()));
+          }
+        }
+      }
+      if (!mounted) return;
+      if (entries.isEmpty) {
+        messenger.showSnackBar(const SnackBar(
+            content: Text('No contacts with phone numbers found.')));
+        return;
+      }
+      final picked = await showModalBottomSheet<(String, String)>(
+        context: context,
+        builder: (ctx) => SafeArea(
+          child: ListView.separated(
+            shrinkWrap: true,
+            itemCount: entries.length,
+            separatorBuilder: (_, __) => const Divider(height: 1),
+            itemBuilder: (_, i) => ListTile(
+              leading: const Icon(Icons.person_outline),
+              title: Text(entries[i].$1),
+              subtitle: Text(entries[i].$2),
+              onTap: () => Navigator.pop(ctx, entries[i]),
+            ),
+          ),
+        ),
+      );
+      if (picked != null) {
+        setState(() {
+          _phone.text = picked.$2.replaceAll(RegExp(r'[\s-]'), '');
+          if (_name.text.trim().isEmpty && picked.$1.isNotEmpty) {
+            _name.text = picked.$1;
+          }
+        });
+      }
+    } catch (e) {
+      messenger.showSnackBar(
+          SnackBar(content: Text('Could not open contacts: $e')));
+    }
+  }
+
 
   @override
   void initState() {
@@ -143,7 +201,14 @@ class _PartyFormScreenState extends State<PartyFormScreen> {
             const SizedBox(height: 14),
             TextField(
               controller: _phone,
-              decoration: InputDecoration(labelText: p.t('phone')),
+              decoration: InputDecoration(
+                labelText: p.t('phone'),
+                suffixIcon: IconButton(
+                  icon: const Icon(Icons.contacts_outlined),
+                  tooltip: 'Pick from contacts',
+                  onPressed: _pickContact,
+                ),
+              ),
               keyboardType: TextInputType.phone,
             ),
             const SizedBox(height: 14),

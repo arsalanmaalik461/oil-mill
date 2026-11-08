@@ -148,7 +148,7 @@ database — every user's record and business data live there:
 1. The user, inside the app: Settings → Account → Change Password.
 2. The admin: hidden Admin Panel → user → Change Password.
 3. Directly in the Firebase Console: open `app_users/{username}` and set a
-   field `password_reset_plain` to the new password. The user signs in with
+   field `password` to the new password. The user signs in with
    it once; the app immediately converts it to a hash and deletes the plain
    field.
 
