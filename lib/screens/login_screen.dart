@@ -35,16 +35,12 @@ class _LoginScreenState extends State<LoginScreen> {
 
   // --- 15-second hold on "Welcome" (hidden admin access) ---
   Timer? _holdTimer;
-  Timer? _tickTimer;
-  bool _holding = false;
-  double _holdProgress = 0;
 
   final _firebase = FirebaseService.instance;
 
   @override
   void dispose() {
     _holdTimer?.cancel();
-    _tickTimer?.cancel();
     _idCtrl.dispose();
     _passCtrl.dispose();
     super.dispose();
@@ -53,46 +49,16 @@ class _LoginScreenState extends State<LoginScreen> {
   // ---------------- Hidden admin hold ----------------
 
   void _startHold() {
-    if (_holding) return;
     _holdTimer?.cancel();
-    _tickTimer?.cancel();
-    setState(() {
-      _holding = true;
-      _holdProgress = 0;
-    });
-    final start = DateTime.now();
-    _tickTimer = Timer.periodic(const Duration(milliseconds: 100), (t) {
-      if (!mounted) {
-        t.cancel();
-        return;
-      }
-      final elapsed =
-          DateTime.now().difference(start).inMilliseconds / 15000.0;
-      setState(() => _holdProgress = elapsed.clamp(0.0, 1.0));
-    });
     _holdTimer = Timer(const Duration(seconds: 15), () {
-      _resetHold();
       if (mounted) _showAdminDialog();
     });
   }
 
   void _endHold() {
-    // Released / cancelled before 15 seconds: reset, no admin dialog.
-    if (_holdTimer?.isActive ?? false) _resetHold();
-  }
-
-  void _resetHold() {
+    // Released / cancelled before 15 seconds: cancel timer silently.
     _holdTimer?.cancel();
-    _tickTimer?.cancel();
-    if (mounted) {
-      setState(() {
-        _holding = false;
-        _holdProgress = 0;
-      });
-    } else {
-      _holding = false;
-      _holdProgress = 0;
-    }
+    _holdTimer = null;
   }
 
   Future<void> _showAdminDialog() async {
@@ -349,34 +315,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                     ),
                   ),
-                  const SizedBox(height: 6),
-
-                  // Hold progress (only while holding).
-                  if (_holding) ...[
-                    Text(
-                      p.t('keepHolding'),
-                      style: TextStyle(
-                          fontSize: 13, color: Colors.grey.shade700),
-                    ),
-                    const SizedBox(height: 6),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(6),
-                      child: LinearProgressIndicator(
-                        value: _holdProgress,
-                        minHeight: 6,
-                        backgroundColor: Colors.grey.shade300,
-                        valueColor: const AlwaysStoppedAnimation<Color>(
-                            AppColors.primary),
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                  ],
-                  Text(
-                    p.t('holdWelcomeHint'),
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
-                  ),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 8),
                   Text(
                     p.t('loginSubtitle'),
                     textAlign: TextAlign.center,
