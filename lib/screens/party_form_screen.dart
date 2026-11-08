@@ -58,19 +58,62 @@ class _PartyFormScreenState extends State<PartyFormScreen> {
       }
       final picked = await showModalBottomSheet<(String, String)>(
         context: context,
-        builder: (ctx) => SafeArea(
-          child: ListView.separated(
-            shrinkWrap: true,
-            itemCount: entries.length,
-            separatorBuilder: (_, __) => const Divider(height: 1),
-            itemBuilder: (_, i) => ListTile(
-              leading: const Icon(Icons.person_outline),
-              title: Text(entries[i].$1),
-              subtitle: Text(entries[i].$2),
-              onTap: () => Navigator.pop(ctx, entries[i]),
-            ),
-          ),
-        ),
+        isScrollControlled: true,
+        builder: (ctx) {
+          var query = '';
+          return StatefulBuilder(
+            builder: (ctx, setSheet) {
+              final q = query.trim().toLowerCase();
+              final digits = q.replaceAll(RegExp(r'\D'), '');
+              final shown = q.isEmpty
+                  ? entries
+                  : entries
+                      .where((e) =>
+                          e.$1.toLowerCase().contains(q) ||
+                          (digits.isNotEmpty &&
+                              e.$2
+                                  .replaceAll(RegExp(r'\D'), '')
+                                  .contains(digits)))
+                      .toList();
+              return SafeArea(
+                child: SizedBox(
+                  height: MediaQuery.of(ctx).size.height * 0.75,
+                  child: Column(
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+                        child: TextField(
+                          autofocus: true,
+                          decoration: const InputDecoration(
+                            hintText: 'Search contacts',
+                            prefixIcon: Icon(Icons.search),
+                            isDense: true,
+                          ),
+                          onChanged: (v) => setSheet(() => query = v),
+                        ),
+                      ),
+                      Expanded(
+                        child: shown.isEmpty
+                            ? const Center(child: Text('No contacts found'))
+                            : ListView.separated(
+                                itemCount: shown.length,
+                                separatorBuilder: (_, __) =>
+                                    const Divider(height: 1),
+                                itemBuilder: (_, i) => ListTile(
+                                  leading: const Icon(Icons.person_outline),
+                                  title: Text(shown[i].$1),
+                                  subtitle: Text(shown[i].$2),
+                                  onTap: () => Navigator.pop(ctx, shown[i]),
+                                ),
+                              ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          );
+        },
       );
       if (picked != null) {
         setState(() {
