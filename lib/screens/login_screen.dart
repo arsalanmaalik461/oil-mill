@@ -1,7 +1,9 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:local_auth/local_auth.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../db/database_helper.dart';
 import '../models/models.dart';
@@ -32,11 +34,54 @@ class _LoginScreenState extends State<LoginScreen> {
   final _idCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
   bool _busy = false;
+  bool _fpReady = false;
 
   // --- 8-second hold on "Welcome" (hidden admin access) ---
   Timer? _holdTimer;
 
   final _firebase = FirebaseService.instance;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkFingerprintSignIn();
+  }
+
+  /// Fingerprint sign-in is offered when fingerprint unlock is ON and a
+  /// user previously signed in online on this device (cached record).
+  Future<void> _checkFingerprintSignIn() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (!(prefs.getBool('fingerprint_enabled') ?? false)) return;
+      final rec = await _firebase.cachedPrimaryUser();
+      if (rec == null || !mounted) return;
+      setState(() => _fpReady = true);
+      // Offer it right away, like banking apps do.
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => _fingerprintSignIn());
+    } catch (_) {}
+  }
+
+  Future<void> _fingerprintSignIn() async {
+    if (_busy || !_fpReady) return;
+    final p = context.read<AppProvider>();
+    setState(() => _busy = true);
+    try {
+      final ok = await LocalAuthentication().authenticate(
+        localizedReason: 'Sign in with your fingerprint',
+        options: const AuthenticationOptions(biometricOnly: true),
+      );
+      if (!ok) return;
+      final rec = await _firebase.cachedPrimaryUser();
+      if (rec == null) return;
+      p.setBiometricAuthed(true);
+      await _finishLogin(rec, p);
+    } catch (_) {
+      // Fingerprint unavailable/failed — password sign-in stays available.
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
   @override
   void dispose() {
@@ -192,79 +237,85 @@ class _LoginScreenState extends State<LoginScreen> {
         );
       }
 
-      // 4) Bind (or create) the local business for this user.
-      final db = DatabaseHelper.instance;
-      var biz = await db.getBusinessByUsername(rec.username);
-      var justCreated = false;
-      int bizId;
-      if (biz == null) {
-        // First user on this device: bind the existing unbound business
-        // (e.g. the owner's own data) instead of starting empty.
-        final all = await db.getBusinesses();
-        for (final b in all) {
-          if (b.appUsername.isEmpty && b.id != null) {
-            biz = b;
-            break;
-          }
-        }
-        if (biz != null) {
-          await db.updateBusiness(Business(
-            id: biz.id,
-            name: rec.businessName.isEmpty ? biz.name : rec.businessName,
-            owner: biz.owner,
-            phone: biz.phone,
-            address: biz.address,
-            appUsername: rec.username,
-          ));
-        }
-      }
-      if (biz == null) {
-        bizId = await db.insertBusiness(Business(
-          name: rec.businessName.isEmpty ? rec.username : rec.businessName,
-          appUsername: rec.username,
-        ));
-        justCreated = true;
-      } else {
-        bizId = biz.id!;
-        if (rec.businessName.isNotEmpty && biz.name != rec.businessName) {
-          await db.updateBusiness(Business(
-            id: biz.id,
-            name: rec.businessName,
-            owner: biz.owner,
-            phone: biz.phone,
-            address: biz.address,
-            appUsername:
-                biz.appUsername.isEmpty ? rec.username : biz.appUsername,
-          ));
-        }
-      }
-
-      // 5) Cloud restore (fresh device) or push latest up (returning user).
-      if (_firebase.isConfigured) {
-        try {
-          if (justCreated) {
-            await _firebase.restoreUserData(rec.username, bizId);
-          } else {
-            final uname = rec.username;
-            unawaited(() async {
-              try {
-                await _firebase.syncUserData(uname, bizId);
-              } catch (_) {}
-            }());
-          }
-        } catch (_) {
-          // Sync problems must never block sign-in.
-        }
-      }
-
-      // 6) Establish the session — RootGate swaps in the app shell.
-      await p.signInSession(rec.username, bizId);
-      if (mounted && Navigator.canPop(context)) {
-        Navigator.pop(context);
-      }
+      await _finishLogin(rec, p);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  /// Steps after credentials are accepted (password or fingerprint):
+  /// bind the user's business, sync, and open the session.
+  Future<void> _finishLogin(AppUserRecord rec, AppProvider p) async {
+        // 4) Bind (or create) the local business for this user.
+        final db = DatabaseHelper.instance;
+        var biz = await db.getBusinessByUsername(rec.username);
+        var justCreated = false;
+        int bizId;
+        if (biz == null) {
+          // First user on this device: bind the existing unbound business
+          // (e.g. the owner's own data) instead of starting empty.
+          final all = await db.getBusinesses();
+          for (final b in all) {
+            if (b.appUsername.isEmpty && b.id != null) {
+              biz = b;
+              break;
+            }
+          }
+          if (biz != null) {
+            await db.updateBusiness(Business(
+              id: biz.id,
+              name: rec.businessName.isEmpty ? biz.name : rec.businessName,
+              owner: biz.owner,
+              phone: biz.phone,
+              address: biz.address,
+              appUsername: rec.username,
+            ));
+          }
+        }
+        if (biz == null) {
+          bizId = await db.insertBusiness(Business(
+            name: rec.businessName.isEmpty ? rec.username : rec.businessName,
+            appUsername: rec.username,
+          ));
+          justCreated = true;
+        } else {
+          bizId = biz.id!;
+          if (rec.businessName.isNotEmpty && biz.name != rec.businessName) {
+            await db.updateBusiness(Business(
+              id: biz.id,
+              name: rec.businessName,
+              owner: biz.owner,
+              phone: biz.phone,
+              address: biz.address,
+              appUsername:
+                  biz.appUsername.isEmpty ? rec.username : biz.appUsername,
+            ));
+          }
+        }
+
+        // 5) Cloud restore (fresh device) or push latest up (returning user).
+        if (_firebase.isConfigured) {
+          try {
+            if (justCreated) {
+              await _firebase.restoreUserData(rec.username, bizId);
+            } else {
+              final uname = rec.username;
+              unawaited(() async {
+                try {
+                  await _firebase.syncUserData(uname, bizId);
+                } catch (_) {}
+              }());
+            }
+          } catch (_) {
+            // Sync problems must never block sign-in.
+          }
+        }
+
+        // 6) Establish the session — RootGate swaps in the app shell.
+        await p.signInSession(rec.username, bizId);
+        if (mounted && Navigator.canPop(context)) {
+          Navigator.pop(context);
+        }
   }
 
   // ---------------- UI ----------------
@@ -379,6 +430,20 @@ class _LoginScreenState extends State<LoginScreen> {
                                         fontWeight: FontWeight.bold),
                                   ),
                           ),
+                          if (_fpReady) ...[
+                            const SizedBox(height: 12),
+                            OutlinedButton.icon(
+                              onPressed: _busy ? null : _fingerprintSignIn,
+                              icon: const Icon(Icons.fingerprint),
+                              label: const Text('Login with Fingerprint'),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: AppColors.primary,
+                                minimumSize: const Size.fromHeight(46),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10)),
+                              ),
+                            ),
+                          ],
                         ],
                       ),
                     ),

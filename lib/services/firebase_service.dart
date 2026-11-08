@@ -392,6 +392,25 @@ extension FirebaseUsers on FirebaseService {
     };
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('cached_users', jsonEncode(cached));
+    await prefs.setString('last_login_username', rec.username);
+  }
+
+  /// The user who most recently signed in online on THIS device (used by
+  /// the fingerprint sign-in on the login screen). Null when none.
+  Future<AppUserRecord?> cachedPrimaryUser() async {
+    final prefs = await SharedPreferences.getInstance();
+    final last = prefs.getString('last_login_username');
+    if (last == null || last.isEmpty) return null;
+    final cached = await _cachedUsers();
+    final v = cached[last];
+    if (v == null) return null;
+    final m = Map<String, dynamic>.from(v as Map);
+    return AppUserRecord(
+      username: last,
+      businessName: (m['business_name'] as String?) ?? '',
+      email: (m['email'] as String?) ?? '',
+      phone: (m['phone'] as String?) ?? '',
+    );
   }
 
   /// Offline fallback: verifies against the record cached on THIS device

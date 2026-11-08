@@ -279,33 +279,28 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _tabChip(String value, String label) {
     final selected = _tab == value;
-    return Expanded(
-      child: InkWell(
-        onTap: () => setState(() => _tab = value),
-        child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 9),
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                child: Text(
-                  label,
-                  maxLines: 1,
-                  softWrap: false,
-                  style: TextStyle(
-                    color: selected ? Colors.white : Colors.white70,
-                    fontSize: 15,
-                    fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                  ),
-                ),
+    return InkWell(
+      onTap: () => setState(() => _tab = value),
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 13),
+            child: Text(
+              label,
+              maxLines: 1,
+              softWrap: false,
+              style: TextStyle(
+                color: selected ? Colors.white : Colors.white70,
+                fontSize: 15,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
               ),
             ),
-            Container(
-              height: 3,
-              color: selected ? Colors.white : Colors.transparent,
-            ),
-          ],
-        ),
+          ),
+          Container(
+            height: 3,
+            color: selected ? Colors.white : Colors.transparent,
+          ),
+        ],
       ),
     );
   }
@@ -514,14 +509,17 @@ class _HomeScreenState extends State<HomeScreen> {
                         ],
                       ),
                       const SizedBox(height: 6),
-                      Row(
-                        children: [
-                          _tabChip('customers', p.t('customers')),
-                          _tabChip('suppliers', p.t('suppliers')),
-                          _tabChip('dealers', p.t('dealers')),
-                          _tabChip('banks', p.t('banks')),
-                          _tabChip('all', p.t('all')),
-                        ],
+                      SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          children: [
+                            _tabChip('customers', p.t('customers')),
+                            _tabChip('suppliers', p.t('suppliers')),
+                            _tabChip('dealers', p.t('dealers')),
+                            _tabChip('banks', p.t('banks')),
+                            _tabChip('all', p.t('all')),
+                          ],
+                        ),
                       ),
                     ],
                   ),

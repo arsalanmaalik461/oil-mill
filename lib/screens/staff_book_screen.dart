@@ -195,37 +195,49 @@ class _StaffBookScreenState extends State<StaffBookScreen> {
             margin: const EdgeInsets.fromLTRB(12, 6, 12, 4),
             child: Padding(
               padding: const EdgeInsets.all(14),
-              child: Row(
+              child: Column(
                 children: [
-                  Expanded(
-                    child: Column(
-                      children: [
-                        Text('$_presentCount',
-                            style: const TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.w800,
-                                color: AppColors.green)),
-                        Text(p.t('totalPresent'),
-                            style: const TextStyle(color: AppColors.textGrey)),
-                      ],
-                    ),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          children: [
+                            Text('$_presentCount',
+                                style: const TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w800,
+                                    color: AppColors.green)),
+                            Text(p.t('totalPresent'),
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
+                                    color: AppColors.textGrey)),
+                          ],
+                        ),
+                      ),
+                      Expanded(
+                        child: Column(
+                          children: [
+                            Text('$_absentCount',
+                                style: const TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w800,
+                                    color: AppColors.red)),
+                            Text(p.t('totalAbsent'),
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
+                                    color: AppColors.textGrey)),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
-                  Expanded(
-                    child: Column(
-                      children: [
-                        Text('$_absentCount',
-                            style: const TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.w800,
-                                color: AppColors.red)),
-                        Text(p.t('totalAbsent'),
-                            style: const TextStyle(color: AppColors.textGrey)),
-                      ],
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: _staff.isEmpty ? null : _markAllPresent,
+                      child: Text(p.t('markAllPresent')),
                     ),
-                  ),
-                  ElevatedButton(
-                    onPressed: _staff.isEmpty ? null : _markAllPresent,
-                    child: Text(p.t('markAllPresent')),
                   ),
                 ],
               ),

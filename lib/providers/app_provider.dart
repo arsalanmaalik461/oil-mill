@@ -18,6 +18,8 @@ class AppProvider extends ChangeNotifier {
   String get sessionUsername => _sessionUsername;
   bool get isLoggedIn => _sessionUsername.isNotEmpty;
   bool get loaded => _loaded;
+  bool _biometricAuthed = false;
+  bool get biometricAuthed => _biometricAuthed;
   bool get pinEnabled => _pinEnabled;
   bool get fingerprintEnabled => _fingerprintEnabled;
   int get tick => _tick;
@@ -67,7 +69,13 @@ class AppProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setBiometricAuthed(bool v) {
+    _biometricAuthed = v;
+    notifyListeners();
+  }
+
   Future<void> signOutSession() async {
+    _biometricAuthed = false;
     _sessionUsername = '';
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('session_username');

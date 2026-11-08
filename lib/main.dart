@@ -64,7 +64,9 @@ class _RootGateState extends State<RootGate> {
       return const LoginScreen();
     }
     // 2) Then the optional device PIN / fingerprint lock.
-    if ((provider.pinEnabled || provider.fingerprintEnabled) && !_unlocked) {
+    if ((provider.pinEnabled || provider.fingerprintEnabled) &&
+        !_unlocked &&
+        !provider.biometricAuthed) {
       return LockScreen(onUnlocked: () => setState(() => _unlocked = true));
     }
     return const MainShell();

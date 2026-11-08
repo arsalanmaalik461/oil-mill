@@ -52,7 +52,6 @@ class MoreScreen extends StatelessWidget {
       _Module('digiCash', Icons.account_balance_wallet, DigiCashScreen()),
       _Module('qrPayments', Icons.qr_code_2, QrPaymentScreen()),
       _Module('production', Icons.factory, ProductionHubScreen()),
-      _Module('accountLogin', Icons.cloud_sync, const LoginScreen(isStandalone: true)),
       _Module('reports', Icons.bar_chart, ReportsScreen()),
       _Module('reminders', Icons.notifications_active, RemindersScreen()),
       _Module('recycleBin', Icons.restore_from_trash, RecycleBinScreen()),
