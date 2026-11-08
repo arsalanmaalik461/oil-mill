@@ -118,7 +118,7 @@ account. `android/app/google-services.json` is in place; the Android app
 database — every user's record and business data live there:
 
 - `app_users/{username}` — one document per app user: `business_name`,
-  `email`, `phone`, `password_hash` (salted SHA-256), `active`, `created_at`.
+  `email`, `phone`, `password` (plain text, owner's choice), `active`, `created_at`.
 - `app_users/{username}/tables/{table}` — that user's full business data
   (parties, bills, stock, production, …). Users can never see each other's
   data: the app only ever reads/writes the signed-in user's own area, and
