@@ -437,6 +437,13 @@ class _CashBookScreenState extends State<CashBookScreen> {
                                             ],
                                           ),
                                         ),
+                                        if (e.attachmentPath != null &&
+                                            e.attachmentPath!
+                                                .isNotEmpty) ...[
+                                          AttachmentThumb(
+                                              path: e.attachmentPath!),
+                                          const SizedBox(width: 10),
+                                        ],
                                         SizedBox(
                                           width: 84,
                                           child: Text(

@@ -453,7 +453,15 @@ class _PartyDetailScreenState extends State<PartyDetailScreen> {
                                 ? t.note
                                 : p.t(t.type)),
                             subtitle: Text(dateTimeFmt.format(t.dateTime)),
-                            trailing: Column(
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (t.attachmentPath != null &&
+                                    t.attachmentPath!.isNotEmpty) ...[
+                                  AttachmentThumb(path: t.attachmentPath!, size: 38),
+                                  const SizedBox(width: 8),
+                                ],
+                                Column(
                               mainAxisAlignment: MainAxisAlignment.center,
                               crossAxisAlignment: CrossAxisAlignment.end,
                               children: [
@@ -467,6 +475,8 @@ class _PartyDetailScreenState extends State<PartyDetailScreen> {
                                         color: AppColors.textGrey),
                                   ),
                               ],
+                              ),
+                            ],
                             ),
                             onLongPress: () => _deleteTransaction(t),
                           );

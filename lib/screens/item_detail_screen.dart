@@ -337,13 +337,23 @@ class _ItemDetailScreenState extends State<ItemDetailScreen> {
                               '${t.rate > 0 ? ' @ ${formatRs(t.rate)}' : ''}',
                             ),
                             subtitle: Text(subtitleParts.join(' • ')),
-                            trailing: t.rate > 0
-                                ? Text(
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (t.attachmentPath != null &&
+                                    t.attachmentPath!.isNotEmpty) ...[
+                                  AttachmentThumb(
+                                      path: t.attachmentPath!, size: 38),
+                                  const SizedBox(width: 8),
+                                ],
+                                if (t.rate > 0)
+                                  Text(
                                     formatRs(t.qty * t.rate),
                                     style: const TextStyle(
-                                        fontWeight: FontWeight.w600),
-                                  )
-                                : null,
+                                      fontWeight: FontWeight.w600),
+                                  ),
+                              ],
+                            ),
                             onLongPress: () => _deleteTransaction(t),
                           );
                         },

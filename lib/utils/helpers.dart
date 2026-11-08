@@ -93,6 +93,58 @@ Future<String?> pickAttachment(BuildContext context) async {
   return dest;
 }
 
+/// Thumbnail of an entry's attached bill image. Tap opens it full-screen.
+class AttachmentThumb extends StatelessWidget {
+  final String path;
+  final double size;
+  const AttachmentThumb({super.key, required this.path, this.size = 40});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () => showAttachmentViewer(context, path),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: Image.file(
+          File(path),
+          width: size,
+          height: size,
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) => Container(
+            width: size,
+            height: size,
+            color: Colors.black12,
+            child: const Icon(Icons.broken_image_outlined, size: 20),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Full-screen view of an attached bill image (pinch to zoom).
+void showAttachmentViewer(BuildContext context, String path) {
+  Navigator.of(context).push(
+    MaterialPageRoute(
+      builder: (_) => Scaffold(
+        appBar: AppBar(title: const Text('Bill Image')),
+        backgroundColor: Colors.black,
+        body: Center(
+          child: InteractiveViewer(
+            child: Image.file(
+              File(path),
+              errorBuilder: (_, __, ___) => const Icon(
+                  Icons.broken_image_outlined,
+                  color: Colors.white,
+                  size: 48),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
 Future<bool> confirmDelete(BuildContext context, String message) async {
   final r = await showDialog<bool>(
     context: context,
