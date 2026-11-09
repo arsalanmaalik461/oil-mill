@@ -18,7 +18,6 @@ import 'reports_screen.dart';
 import 'reminders_screen.dart';
 import 'recycle_bin_screen.dart';
 import 'settings_screen.dart';
-import 'login_screen.dart';
 
 class _Module {
   final String labelKey;
