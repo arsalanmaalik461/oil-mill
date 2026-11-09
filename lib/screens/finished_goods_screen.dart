@@ -258,23 +258,26 @@ class _FinishedGoodsScreenState extends State<FinishedGoodsScreen> {
                       const Icon(Icons.inventory_2,
                           color: Colors.white, size: 28),
                       const SizedBox(width: 12),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            p.t('totalStockValue'),
-                            style: const TextStyle(
-                                color: Colors.white70, fontSize: 12),
-                          ),
-                          Text(
-                            formatRs(d.totalValue),
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 20,
-                              fontWeight: FontWeight.w700,
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              p.t('totalStockValue'),
+                              style: const TextStyle(
+                                  color: Colors.white70, fontSize: 12),
                             ),
-                          ),
-                        ],
+                            Text(
+                              formatRs(d.totalValue),
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 20,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ],
                   ),
