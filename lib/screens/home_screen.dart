@@ -12,7 +12,6 @@ import 'bill_book_screen.dart';
 import 'cash_book_screen.dart';
 import 'party_detail_screen.dart';
 import 'party_form_screen.dart';
-import 'recycle_bin_screen.dart';
 import 'roznamcha_screen.dart';
 import 'staff_book_screen.dart';
 import 'stock_book_screen.dart';
