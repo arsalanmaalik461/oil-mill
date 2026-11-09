@@ -136,6 +136,8 @@ class AmountText extends StatelessWidget {
         : ((v > 0) == positiveIsGreen ? AppColors.green : AppColors.red);
     return Text(
       formatRs(v.abs()),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
       style: TextStyle(color: color, fontSize: fontSize, fontWeight: fontWeight),
     );
   }
