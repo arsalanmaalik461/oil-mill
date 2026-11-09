@@ -235,23 +235,26 @@ class _StockBookScreenState extends State<StockBookScreen> {
             const Icon(Icons.inventory_2,
                 color: AppColors.primary, size: 26),
             const SizedBox(width: 12),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  p.t('totalStockValue'),
-                  style: const TextStyle(
-                      fontSize: 12, color: AppColors.textGrey),
-                ),
-                Text(
-                  formatRs(totalValue),
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w800,
-                    color: AppColors.primaryDark,
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    p.t('totalStockValue'),
+                    style: const TextStyle(
+                        fontSize: 12, color: AppColors.textGrey),
                   ),
-                ),
-              ],
+                  Text(
+                    formatRs(totalValue),
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.primaryDark,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ],
         ),
