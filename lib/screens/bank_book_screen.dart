@@ -83,10 +83,14 @@ class _BankBookScreenState extends State<BankBookScreen> {
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text(p.t('bankBalance'),
-                        style: const TextStyle(
-                            fontSize: 15, fontWeight: FontWeight.w600)),
-                    AmountText(_totalBalance, fontSize: 17),
+                    Expanded(
+                      child: Text(p.t('bankBalance'),
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 15, fontWeight: FontWeight.w600)),
+                    ),
+                    const SizedBox(width: 8),
+                    Flexible(child: AmountText(_totalBalance, fontSize: 17)),
                   ],
                 ),
               ),
