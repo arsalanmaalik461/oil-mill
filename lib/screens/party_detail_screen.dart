@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
 import '../db/database_helper.dart';
@@ -7,6 +8,8 @@ import '../providers/app_provider.dart';
 import '../theme/app_theme.dart';
 import '../utils/helpers.dart';
 import '../utils/pdf_service.dart';
+import 'party_entry_detail_screen.dart';
+import 'party_entry_form_screen.dart';
 import 'party_form_screen.dart';
 
 class _DetailData {
@@ -16,8 +19,10 @@ class _DetailData {
   const _DetailData(this.party, this.transactions, this.balance);
 }
 
-/// One party's ledger: balance card, contact actions, transaction history
-/// and Udhaar / Wasool entry buttons.
+/// One party's ledger, modelled on the original khata app: balance card,
+/// Report / Set Date / Reminder / SMS actions, a ⋮ menu with profile,
+/// switch-type and business card, entries in You Gave / You Got columns,
+/// and tap-an-entry detail.
 class PartyDetailScreen extends StatefulWidget {
   final Party party;
   const PartyDetailScreen({super.key, required this.party});
@@ -120,6 +125,22 @@ class _PartyDetailScreenState extends State<PartyDetailScreen> {
         'Thank you!';
   }
 
+  Party _copyParty(Party party,
+      {String? type, DateTime? dueDate, bool clearDueDate = false}) {
+    return Party(
+      id: party.id,
+      businessId: party.businessId,
+      type: type ?? party.type,
+      name: party.name,
+      phone: party.phone,
+      address: party.address,
+      openingBalance: party.openingBalance,
+      deleted: party.deleted,
+      lastReminderAt: party.lastReminderAt,
+      dueDate: clearDueDate ? null : (dueDate ?? party.dueDate),
+    );
+  }
+
   Future<void> _edit() async {
     final fresh =
         await DatabaseHelper.instance.getParty(widget.party.id!) ?? widget.party;
@@ -133,6 +154,45 @@ class _PartyDetailScreenState extends State<PartyDetailScreen> {
       _reload();
       context.read<AppProvider>().bump();
     }
+  }
+
+  Future<void> _switchType(Party party) async {
+    final p = context.read<AppProvider>();
+    final newType = party.type == 'customer' ? 'supplier' : 'customer';
+    await DatabaseHelper.instance.updateParty(_copyParty(party, type: newType));
+    if (!mounted) return;
+    showSnack(context, p.t('savedSuccessfully'));
+    _reload();
+    context.read<AppProvider>().bump();
+  }
+
+  Future<void> _shareBusinessCard() async {
+    final biz = await _currentBusiness();
+    final lines = <String>[
+      biz.name,
+      if (biz.owner.isNotEmpty) biz.owner,
+      if (biz.phone.isNotEmpty) biz.phone,
+      if (biz.address.isNotEmpty) biz.address,
+    ];
+    await shareText(lines.join('\n'));
+  }
+
+  Future<void> _setDate(Party party) async {
+    final picked = await pickDateOnly(context, party.dueDate ?? DateTime.now());
+    if (picked == null || !mounted) return;
+    final date = DateTime(picked.year, picked.month, picked.day);
+    await DatabaseHelper.instance.updateParty(_copyParty(party, dueDate: date));
+    if (!mounted) return;
+    _reload();
+    context.read<AppProvider>().bump();
+  }
+
+  Future<void> _clearDate(Party party) async {
+    await DatabaseHelper.instance
+        .updateParty(_copyParty(party, clearDueDate: true));
+    if (!mounted) return;
+    _reload();
+    context.read<AppProvider>().bump();
   }
 
   Future<void> _deleteParty() async {
@@ -156,111 +216,29 @@ class _PartyDetailScreenState extends State<PartyDetailScreen> {
     context.read<AppProvider>().bump();
   }
 
-  Future<void> _showTxnForm(String type) async {
-    final p = context.read<AppProvider>();
-    final amountCtrl = TextEditingController();
-    final noteCtrl = TextEditingController();
-    var selectedDate = DateTime.now();
-    String? attachment;
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (bc) => StatefulBuilder(
-        builder: (bc, setSheetState) => Padding(
-          padding: EdgeInsets.only(
-            left: 16,
-            right: 16,
-            top: 16,
-            bottom: MediaQuery.of(bc).viewInsets.bottom + 16,
-          ),
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  p.t(type),
-                  style: const TextStyle(
-                      fontSize: 17, fontWeight: FontWeight.w700),
-                ),
-                const SizedBox(height: 14),
-                TextField(
-                  controller: amountCtrl,
-                  decoration: InputDecoration(labelText: p.t('amount')),
-                  keyboardType:
-                      const TextInputType.numberWithOptions(decimal: true),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: noteCtrl,
-                  decoration: InputDecoration(labelText: p.t('note')),
-                ),
-                const SizedBox(height: 6),
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.calendar_month),
-                  title: Text(dateTimeFmt.format(selectedDate)),
-                  onTap: () async {
-                    final picked = await pickDateTime(bc, selectedDate);
-                    if (picked != null) {
-                      setSheetState(() => selectedDate = picked);
-                    }
-                  },
-                ),
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.camera_alt),
-                  title: Text(attachment == null
-                      ? p.t('attachBill')
-                      : attachment!.split('/').last),
-                  onTap: () async {
-                    final path = await pickAttachment(bc);
-                    if (path != null) setSheetState(() => attachment = path);
-                  },
-                ),
-                const SizedBox(height: 10),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: type == 'udhaar'
-                          ? AppColors.red
-                          : AppColors.green,
-                    ),
-                    onPressed: () async {
-                      final amount =
-                          double.tryParse(amountCtrl.text.trim());
-                      if (amount == null || amount <= 0) {
-                        showSnack(bc, p.t('invalidAmount'));
-                        return;
-                      }
-                      await DatabaseHelper.instance.insertPartyTransaction(
-                        PartyTransaction(
-                          partyId: widget.party.id!,
-                          type: type,
-                          amount: amount,
-                          note: noteCtrl.text.trim(),
-                          dateTime: selectedDate,
-                          attachmentPath: attachment,
-                        ),
-                      );
-                      if (!bc.mounted) return;
-                      Navigator.pop(bc);
-                      if (!mounted) return;
-                      _reload();
-                      context.read<AppProvider>().bump();
-                    },
-                    child: Text(p.t('save')),
-                  ),
-                ),
-              ],
-            ),
-          ),
+  Future<void> _openEntryForm(String type, Party party) async {
+    final r = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PartyEntryFormScreen(party: party, type: type),
+      ),
+    );
+    if (r == true && mounted) _reload();
+  }
+
+  Future<void> _openEntryDetail(
+      Party party, PartyTransaction t, Map<int, double> running) async {
+    final r = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PartyEntryDetailScreen(
+          party: party,
+          transaction: t,
+          runningBalance: t.id != null ? (running[t.id!] ?? 0) : 0,
         ),
       ),
     );
-    amountCtrl.dispose();
-    noteCtrl.dispose();
+    if (r == true && mounted) _reload();
   }
 
   Widget _actionButton(IconData icon, String label, VoidCallback onTap) {
@@ -268,13 +246,83 @@ class _PartyDetailScreenState extends State<PartyDetailScreen> {
       onTap: onTap,
       borderRadius: BorderRadius.circular(10),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(icon, color: AppColors.primary),
             const SizedBox(height: 4),
             Text(label, style: const TextStyle(fontSize: 11)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// One ledger entry in the original layout: date-time header, note,
+  /// pink "Bal." chip, and the amount in the You Gave / You Got column.
+  Widget _entryRow(AppProvider p, Party party, PartyTransaction t,
+      Map<int, double> running) {
+    final isUdhaar = t.type == 'udhaar';
+    final runBal = t.id != null ? running[t.id!] : null;
+    Widget amountCol(bool gave) {
+      final show = gave == isUdhaar;
+      return SizedBox(
+        width: 82,
+        child: show
+            ? AmountText(t.amount, positiveIsGreen: !gave, fontSize: 14.5)
+            : null,
+      );
+    }
+
+    return InkWell(
+      onTap: () => _openEntryDetail(party, t, running),
+      onLongPress: () => _deleteTransaction(t),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 10, 12, 10),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    DateFormat('EEE, dd MMM yy • hh:mm a').format(t.dateTime),
+                    style: const TextStyle(
+                        fontSize: 12, color: AppColors.textGrey),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    t.note.isNotEmpty ? t.note : p.t(t.type),
+                    style: const TextStyle(fontSize: 14.5),
+                  ),
+                  if (runBal != null) ...[
+                    const SizedBox(height: 5),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 7, vertical: 2.5),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFCE4EC),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        'Bal. ${formatRs(runBal.abs())}${runBal < 0 ? ' cr' : ''}',
+                        style: const TextStyle(
+                            fontSize: 11.5, color: Color(0xFF880E4F)),
+                      ),
+                    ),
+                  ],
+                  if (t.attachmentPath != null &&
+                      t.attachmentPath!.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    AttachmentThumb(path: t.attachmentPath!, size: 44),
+                  ],
+                ],
+              ),
+            ),
+            amountCol(true),
+            amountCol(false),
           ],
         ),
       ),
@@ -288,15 +336,48 @@ class _PartyDetailScreenState extends State<PartyDetailScreen> {
       appBar: AppBar(
         title: Text(widget.party.name),
         actions: [
-          PopupMenuButton<String>(
-            onSelected: (v) {
-              if (v == 'edit') _edit();
-              if (v == 'delete') _deleteParty();
+          FutureBuilder<_DetailData>(
+            future: _future,
+            builder: (context, snap) {
+              final party = snap.data?.party ?? widget.party;
+              return PopupMenuButton<String>(
+                onSelected: (v) {
+                  if (v == 'edit') _edit();
+                  if (v == 'switch') _switchType(party);
+                  if (v == 'card') _shareBusinessCard();
+                  if (v == 'report' && snap.data != null) {
+                    final data = snap.data!;
+                    _currentBusiness().then((biz) => shareLedgerPdf(
+                          business: biz,
+                          party: data.party,
+                          transactions: data.transactions,
+                          balance: data.balance,
+                        ));
+                  }
+                  if (v == 'delete') _deleteParty();
+                },
+                itemBuilder: (c) => [
+                  PopupMenuItem(
+                    value: 'edit',
+                    child: Text(party.type == 'supplier'
+                        ? p.t('supplierProfile')
+                        : p.t('customerProfile')),
+                  ),
+                  if (party.type == 'customer' || party.type == 'supplier')
+                    PopupMenuItem(
+                      value: 'switch',
+                      child: Text(party.type == 'customer'
+                          ? p.t('switchToSupplier')
+                          : p.t('switchToCustomer')),
+                    ),
+                  PopupMenuItem(
+                      value: 'card', child: Text(p.t('businessCard'))),
+                  PopupMenuItem(
+                      value: 'report', child: Text(p.t('reportLabel'))),
+                  PopupMenuItem(value: 'delete', child: Text(p.t('delete'))),
+                ],
+              );
             },
-            itemBuilder: (c) => [
-              PopupMenuItem(value: 'edit', child: Text(p.t('edit'))),
-              PopupMenuItem(value: 'delete', child: Text(p.t('delete'))),
-            ],
           ),
         ],
       ),
@@ -312,8 +393,7 @@ class _PartyDetailScreenState extends State<PartyDetailScreen> {
           final running = _runningBalances(data);
           var totalGave =
               party.openingBalance > 0 ? party.openingBalance : 0.0;
-          var totalGot =
-              party.openingBalance < 0 ? -party.openingBalance : 0.0;
+          var totalGot = party.openingBalance < 0 ? -party.openingBalance : 0.0;
           for (final t in data.transactions) {
             if (t.type == 'udhaar') {
               totalGave += t.amount;
@@ -363,15 +443,49 @@ class _PartyDetailScreenState extends State<PartyDetailScreen> {
                           ],
                         ],
                       ),
+                      if (party.dueDate != null) ...[
+                        const SizedBox(height: 10),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Icon(Icons.event,
+                                size: 16, color: AppColors.primary),
+                            const SizedBox(width: 5),
+                            Text(
+                              '${p.t('paymentDate')}: ${DateFormat('dd MMM yyyy').format(party.dueDate!)}',
+                              style: const TextStyle(
+                                  fontSize: 13, fontWeight: FontWeight.w600),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.close, size: 16),
+                              tooltip: p.t('clearDate'),
+                              visualDensity: VisualDensity.compact,
+                              onPressed: () => _clearDate(party),
+                            ),
+                          ],
+                        ),
+                      ],
                     ],
                   ),
                 ),
               ),
-              Padding(
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
+                    _actionButton(Icons.picture_as_pdf, p.t('reportLabel'),
+                        () async {
+                      final biz = await _currentBusiness();
+                      await shareLedgerPdf(
+                        business: biz,
+                        party: party,
+                        transactions: data.transactions,
+                        balance: balance,
+                      );
+                    }),
+                    _actionButton(Icons.calendar_month, p.t('setDate'),
+                        () => _setDate(party)),
                     _actionButton(Icons.chat_bubble, p.t('whatsappReminder'),
                         () async {
                       if (party.phone.trim().isEmpty) {
@@ -398,15 +512,6 @@ class _PartyDetailScreenState extends State<PartyDetailScreen> {
                       }
                       await callPhone(party.phone);
                     }),
-                    _actionButton(Icons.picture_as_pdf, 'PDF', () async {
-                      final biz = await _currentBusiness();
-                      await shareLedgerPdf(
-                        business: biz,
-                        party: party,
-                        transactions: data.transactions,
-                        balance: balance,
-                      );
-                    }),
                     _actionButton(Icons.share, p.t('share'), () async {
                       final biz = await _currentBusiness();
                       final label = balance > 0
@@ -422,65 +527,59 @@ class _PartyDetailScreenState extends State<PartyDetailScreen> {
                 ),
               ),
               const Divider(height: 1),
+              if (data.transactions.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 12, 2),
+                  child: Row(
+                    children: [
+                      const Spacer(),
+                      SizedBox(
+                        width: 82,
+                        child: Text(p.t('udhaar'),
+                            textAlign: TextAlign.right,
+                            style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.red)),
+                      ),
+                      SizedBox(
+                        width: 82,
+                        child: Text(p.t('wasool'),
+                            textAlign: TextAlign.right,
+                            style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.green)),
+                      ),
+                    ],
+                  ),
+                ),
               Expanded(
                 child: data.transactions.isEmpty
-                    ? Center(child: Text(p.t('noData')))
+                    ? Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.lock_outline,
+                                size: 40, color: AppColors.textGrey),
+                            const SizedBox(height: 10),
+                            Text(p.t('onlyYouCanSee'),
+                                style: const TextStyle(
+                                    color: AppColors.textGrey)),
+                            const SizedBox(height: 26),
+                            Text(p.t('addFirstEntry'),
+                                style: const TextStyle(
+                                    fontSize: 15, fontWeight: FontWeight.w600)),
+                            const Icon(Icons.arrow_downward,
+                                color: AppColors.primary),
+                          ],
+                        ),
+                      )
                     : ListView.separated(
                         itemCount: data.transactions.length,
-                        separatorBuilder: (_, __) =>
-                            const Divider(height: 1),
-                        itemBuilder: (context, i) {
-                          final t = data.transactions[i];
-                          final isUdhaar = t.type == 'udhaar';
-                          final runBal =
-                              t.id != null ? running[t.id!] : null;
-                          return ListTile(
-                            leading: CircleAvatar(
-                              backgroundColor: isUdhaar
-                                  ? const Color(0xFFFDE8E8)
-                                  : const Color(0xFFE2F6E9),
-                              child: Icon(
-                                isUdhaar
-                                    ? Icons.arrow_upward
-                                    : Icons.arrow_downward,
-                                color: isUdhaar
-                                    ? AppColors.red
-                                    : AppColors.green,
-                                size: 19,
-                              ),
-                            ),
-                            title: Text(t.note.isNotEmpty
-                                ? t.note
-                                : p.t(t.type)),
-                            subtitle: Text(dateTimeFmt.format(t.dateTime)),
-                            trailing: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                if (t.attachmentPath != null &&
-                                    t.attachmentPath!.isNotEmpty) ...[
-                                  AttachmentThumb(path: t.attachmentPath!, size: 38),
-                                  const SizedBox(width: 8),
-                                ],
-                                Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                                AmountText(t.amount,
-                                    positiveIsGreen: !isUdhaar),
-                                if (runBal != null)
-                                  Text(
-                                    '${p.t('balance')}: ${formatRs(runBal.abs())}',
-                                    style: const TextStyle(
-                                        fontSize: 11,
-                                        color: AppColors.textGrey),
-                                  ),
-                              ],
-                              ),
-                            ],
-                            ),
-                            onLongPress: () => _deleteTransaction(t),
-                          );
-                        },
+                        separatorBuilder: (_, __) => const Divider(height: 1),
+                        itemBuilder: (context, i) =>
+                            _entryRow(p, party, data.transactions[i], running),
                       ),
               ),
             ],
@@ -496,7 +595,7 @@ class _PartyDetailScreenState extends State<PartyDetailScreen> {
                 child: ElevatedButton(
                   style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.red),
-                  onPressed: () => _showTxnForm('udhaar'),
+                  onPressed: () => _openEntryForm('udhaar', widget.party),
                   child: Text(p.t('udhaar')),
                 ),
               ),
@@ -505,7 +604,7 @@ class _PartyDetailScreenState extends State<PartyDetailScreen> {
                 child: ElevatedButton(
                   style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.green),
-                  onPressed: () => _showTxnForm('wasool'),
+                  onPressed: () => _openEntryForm('wasool', widget.party),
                   child: Text(p.t('wasool')),
                 ),
               ),
