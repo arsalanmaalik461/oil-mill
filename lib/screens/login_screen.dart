@@ -246,38 +246,48 @@ class _LoginScreenState extends State<LoginScreen> {
   /// Steps after credentials are accepted (password or fingerprint):
   /// bind the user's business, sync, and open the session.
   Future<void> _finishLogin(AppUserRecord rec, AppProvider p) async {
-        // 4) Bind (or create) the local business for this user.
+        // 4) Find THIS user's own local business. Another user's business
+        // is never opened, renamed or claimed.
         final db = DatabaseHelper.instance;
+        final prefs = await SharedPreferences.getInstance();
+        final everLoggedIn = (prefs.getBool('ever_logged_in') ?? false) ||
+            (prefs.getString('session_username')?.isNotEmpty ?? false) ||
+            prefs.getString('cached_users') != null;
         var biz = await db.getBusinessByUsername(rec.username);
-        var justCreated = false;
-        int bizId;
         if (biz == null) {
-          // First user on this device: bind the existing unbound business
-          // (e.g. the owner's own data) instead of starting empty.
+          // Safe takeover of the unbound default business, ONLY when it
+          // is empty (the fresh-install seed) or when nobody has ever
+          // signed in on this device (the owner's own pre-login data).
+          // An unbound business WITH data on a device that already had
+          // sign-ins may belong to someone else — never touch it.
           final all = await db.getBusinesses();
-          for (final b in all) {
-            if (b.appUsername.isEmpty && b.id != null) {
-              biz = b;
-              break;
+          final unbound = all
+              .where((b) => b.appUsername.isEmpty && b.id != null)
+              .toList();
+          if (unbound.length == 1) {
+            final candidate = unbound.first;
+            final rows = await db.businessRowCount(candidate.id!);
+            if (rows == 0 || !everLoggedIn) {
+              await db.updateBusiness(Business(
+                id: candidate.id,
+                name: rec.businessName.isEmpty
+                    ? candidate.name
+                    : rec.businessName,
+                owner: candidate.owner,
+                phone: candidate.phone,
+                address: candidate.address,
+                appUsername: rec.username,
+              ));
+              biz = await db.getBusinessByUsername(rec.username);
             }
           }
-          if (biz != null) {
-            await db.updateBusiness(Business(
-              id: biz.id,
-              name: rec.businessName.isEmpty ? biz.name : rec.businessName,
-              owner: biz.owner,
-              phone: biz.phone,
-              address: biz.address,
-              appUsername: rec.username,
-            ));
-          }
         }
+        int bizId;
         if (biz == null) {
           bizId = await db.insertBusiness(Business(
             name: rec.businessName.isEmpty ? rec.username : rec.businessName,
             appUsername: rec.username,
           ));
-          justCreated = true;
         } else {
           bizId = biz.id!;
           if (rec.businessName.isNotEmpty && biz.name != rec.businessName) {
@@ -293,11 +303,17 @@ class _LoginScreenState extends State<LoginScreen> {
           }
         }
 
-        // 5) Cloud restore (fresh device) or push latest up (returning user).
+        // 5) Cloud: when this user's local business is EMPTY but their
+        // cloud backup holds data, restore it now — this is what makes
+        // the data follow the account to a new phone. When local data
+        // exists, push the latest up in the background instead.
         if (_firebase.isConfigured) {
           try {
-            if (justCreated) {
-              await _firebase.restoreUserData(rec.username, bizId);
+            final localRows = await db.businessRowCount(bizId);
+            if (localRows == 0) {
+              await _firebase
+                  .restoreUserData(rec.username, bizId)
+                  .timeout(const Duration(seconds: 45));
             } else {
               final uname = rec.username;
               unawaited(() async {
@@ -313,6 +329,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
         // 6) Establish the session — RootGate swaps in the app shell.
         await p.signInSession(rec.username, bizId);
+        await prefs.setBool('ever_logged_in', true);
         if (mounted && Navigator.canPop(context)) {
           Navigator.pop(context);
         }
