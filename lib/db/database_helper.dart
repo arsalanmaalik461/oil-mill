@@ -938,6 +938,31 @@ class DatabaseHelper {
         _ => 'batch_id',
       };
 
+  /// Cross-references that are NOT the scoping parent FK but still point
+  /// at another table's row (rewritten on import like the parent FKs).
+  static const _secondaryRefs = <String, Map<String, String>>{
+    'cash_entries': {'party_id': 'parties'},
+    'bills': {'party_id': 'parties'},
+    'qr_payments': {'party_id': 'parties'},
+    'stock_transactions': {'supplier_id': 'parties'},
+    'bill_items': {'item_id': 'items'},
+    'production_inputs': {'item_id': 'items'},
+    'production_outputs': {'item_id': 'items'},
+  };
+
+  /// Total data rows owned by one business (parent tables only — enough
+  /// to tell "this business has data" from "this business is empty").
+  Future<int> businessRowCount(int bizId) async {
+    final d = await db;
+    var total = 0;
+    for (final t in _bizTables) {
+      final r = await d.rawQuery(
+          'SELECT COUNT(*) AS c FROM $t WHERE business_id = ?', [bizId]);
+      total += (r.first['c'] as int?) ?? 0;
+    }
+    return total;
+  }
+
   /// All data belonging to ONE business, as a JSON-safe map
   /// (same shape as [exportJson] but business-scoped).
   Future<Map<String, dynamic>> exportBusinessData(int bizId) async {
@@ -966,8 +991,15 @@ class DatabaseHelper {
   }
 
   /// Replaces ALL local data of business [bizId] with [data] (from
-  /// [exportBusinessData] of the same business on any device). Other
-  /// businesses on this device are untouched. Row ids are preserved.
+  /// [exportBusinessData] of the same user's business, possibly on
+  /// ANOTHER device). Other businesses on this device are untouched.
+  ///
+  /// Cross-device safety: every row is re-scoped to [bizId]. A row keeps
+  /// its original id only when that id is still free in its table;
+  /// otherwise it gets a fresh id and every reference to it (child FKs
+  /// and cross-references) is rewritten to the new id. Without this, a
+  /// restore onto a phone that already holds another user's rows would
+  /// silently drop colliding rows or attach them to the wrong business.
   Future<void> importBusinessData(int bizId, Map<String, dynamic> data) async {
     if (data['app'] != 'namat_oil_mill') {
       throw const FormatException('Not a Namat Oil Mill backup');
@@ -992,13 +1024,66 @@ class DatabaseHelper {
       for (final t in _bizTables) {
         await txn.delete(t, where: 'business_id = ?', whereArgs: [bizId]);
       }
-      // Insert in parent-before-child order.
-      for (final t in allTables) {
-        if (t == 'businesses') continue;
+
+      Future<bool> idTaken(String table, int id) async {
+        final r = await txn.query(table,
+            columns: ['id'], where: 'id = ?', whereArgs: [id], limit: 1);
+        return r.isNotEmpty;
+      }
+
+      void remapRefs(Map<String, dynamic> row, String table,
+          Map<String, Map<int, int>> idMaps) {
+        final refs = _secondaryRefs[table];
+        if (refs == null) return;
+        refs.forEach((column, refTable) {
+          final v = row[column];
+          if (v is int) {
+            // Unknown reference -> null, never point at another
+            // business's row by accident.
+            row[column] = idMaps[refTable]?[v];
+          }
+        });
+      }
+
+      // Parents first (their id maps drive every reference rewrite).
+      final idMaps = <String, Map<int, int>>{};
+      for (final t in _bizTables) {
         final rows = (data[t] as List?) ?? const [];
-        for (final row in rows) {
-          await txn.insert(t, Map<String, dynamic>.from(row as Map),
-              conflictAlgorithm: t == 'attendance'
+        final map = <int, int>{};
+        for (final raw in rows) {
+          final row = Map<String, dynamic>.from(raw as Map);
+          final oldId = row['id'] as int?;
+          row['business_id'] = bizId;
+          remapRefs(row, t, idMaps);
+          if (oldId != null && !await idTaken(t, oldId)) {
+            await txn.insert(t, row);
+            map[oldId] = oldId;
+          } else {
+            row.remove('id');
+            final newId = await txn.insert(t, row);
+            if (oldId != null) map[oldId] = newId;
+          }
+        }
+        idMaps[t] = map;
+      }
+      // Children: parent FK + cross-references rewritten via the maps.
+      for (final e in _childTables.entries) {
+        final rows = (data[e.key] as List?) ?? const [];
+        final fk = _fkOf(e.key);
+        final parentMap = idMaps[e.value] ?? const <int, int>{};
+        for (final raw in rows) {
+          final row = Map<String, dynamic>.from(raw as Map);
+          final oldFk = row[fk] as int?;
+          final newFk = oldFk == null ? null : parentMap[oldFk];
+          if (newFk == null) continue; // parent not in backup: skip orphan
+          row[fk] = newFk;
+          remapRefs(row, e.key, idMaps);
+          final oldId = row['id'] as int?;
+          if (oldId == null || await idTaken(e.key, oldId)) {
+            row.remove('id');
+          }
+          await txn.insert(e.key, row,
+              conflictAlgorithm: e.key == 'attendance'
                   ? ConflictAlgorithm.replace
                   : ConflictAlgorithm.ignore);
         }
