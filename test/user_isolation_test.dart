@@ -77,4 +77,47 @@ void main() {
     // B's binding survived A's restore
     expect((await db.getBusinessByUsername('bilal'))?.id, bizB);
   });
+
+  test('cross-device restore remaps colliding ids into the target business',
+      () async {
+    // Simulate a restore onto a phone where business 1 (another user's)
+    // already holds rows with the SAME ids as the backup: import user
+    // A's backup into a NEW business C on this same database.
+    final exportA = await db.exportBusinessData(1);
+    final aPartyId = (exportA['parties'] as List).first['id'] as int;
+
+    final bizC = await db.insertBusiness(
+        Business(name: 'Arslan Second Phone', appUsername: 'arslan2'));
+    await db.importBusinessData(bizC, exportA);
+
+    // C now holds A's data, re-scoped to C...
+    final exportC = await db.exportBusinessData(bizC);
+    final cParties = exportC['parties'] as List;
+    expect(cParties.length, 1);
+    expect((cParties.first as Map)['name'], 'A Customer');
+    expect((cParties.first as Map)['business_id'], bizC);
+    // ...under a FRESH id, because the original id is taken by A's row.
+    final cPartyId = (cParties.first as Map)['id'] as int;
+    expect(cPartyId, isNot(aPartyId));
+    // The transaction followed its party to the new id.
+    final cTxns = exportC['party_transactions'] as List;
+    expect(cTxns.length, 1);
+    expect((cTxns.first as Map)['amount'], 7000.0);
+    expect((cTxns.first as Map)['party_id'], cPartyId);
+    expect(await db.getPartyBalance(cPartyId), 7000);
+
+    // A and B are untouched by C's restore.
+    expect(await db.getPartyBalance(aPartyId), 7000);
+    final bizB = (await db.getBusinessByUsername('bilal'))!.id!;
+    final bPartyId =
+        ((await db.exportBusinessData(bizB))['parties'] as List)
+            .first['id'] as int;
+    expect(await db.getPartyBalance(bPartyId), 3000);
+
+    // Row counts: data businesses count > 0, a fresh business counts 0.
+    expect(await db.businessRowCount(1), greaterThan(0));
+    expect(await db.businessRowCount(bizC), greaterThan(0));
+    final bizD = await db.insertBusiness(Business(name: 'Empty'));
+    expect(await db.businessRowCount(bizD), 0);
+  });
 }
