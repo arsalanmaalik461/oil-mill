@@ -179,3 +179,25 @@ Future<DateTime?> pickDateTime(BuildContext context, DateTime initial) async {
   if (time == null) return DateTime(date.year, date.month, date.day, initial.hour, initial.minute);
   return DateTime(date.year, date.month, date.day, time.hour, time.minute);
 }
+
+/// Date-only picker. Uses the ROOT navigator's context: called from a
+/// page or dialog this always finds a MaterialLocalizations ancestor,
+/// which is where the old in-sheet calls could fail.
+Future<DateTime?> pickDateOnly(BuildContext context, DateTime initial) {
+  final root = Navigator.of(context, rootNavigator: true).context;
+  return showDatePicker(
+    context: root,
+    initialDate: initial,
+    firstDate: DateTime(2020),
+    lastDate: DateTime(2100),
+  );
+}
+
+/// Time-only picker (root navigator context, see [pickDateOnly]).
+Future<TimeOfDay?> pickTimeOnly(BuildContext context, DateTime initial) {
+  final root = Navigator.of(context, rootNavigator: true).context;
+  return showTimePicker(
+    context: root,
+    initialTime: TimeOfDay.fromDateTime(initial),
+  );
+}
