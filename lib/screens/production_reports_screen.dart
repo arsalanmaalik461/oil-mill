@@ -45,6 +45,19 @@ class _ReportData {
   final List<_ProdAgg> products;
   final Map<String, double> prodByProduct; // item name -> qty produced
   final List<_BatchRow> batches;
+
+  /// All-time FIFO batch profitability (Phase 5).
+  final List<
+      ({
+        int batchId,
+        int batchNo,
+        double producedQty,
+        double soldQty,
+        double revenue,
+        double cogs,
+        double profit,
+        double unsoldQty
+      })> batchProfits;
   final List<MapEntry<String, double>> customers;
   _ReportData({
     required this.sales,
@@ -58,6 +71,7 @@ class _ReportData {
     required this.products,
     required this.prodByProduct,
     required this.batches,
+    required this.batchProfits,
     required this.customers,
   });
   double get grossProfit => sales - cogs;
@@ -283,6 +297,7 @@ class _ProductionReportsScreenState extends State<ProductionReportsScreen> {
       products: products,
       prodByProduct: prodByProduct,
       batches: batchRows,
+      batchProfits: await db.getBatchProfits(bizId),
       customers: customers,
     );
   }
@@ -388,6 +403,7 @@ class _ProductionReportsScreenState extends State<ProductionReportsScreen> {
                       products: const [],
                       prodByProduct: const {},
                       batches: const [],
+                      batchProfits: const [],
                       customers: const [],
                     );
                 return ListView(
@@ -498,6 +514,34 @@ class _ProductionReportsScreenState extends State<ProductionReportsScreen> {
                         ),
                       ),
                     ],
+                    _sectionTitle('Batch-wise Profit (FIFO, all time)'),
+                    if (d.batchProfits.isEmpty)
+                      Text(p.t('noData'),
+                          style: const TextStyle(color: AppColors.textGrey)),
+                    ...d.batchProfits.map(
+                      (bp) => Card(
+                        margin: const EdgeInsets.symmetric(vertical: 3),
+                        child: ListTile(
+                          title: Text('Batch #${bp.batchNo}',
+                              style:
+                                  const TextStyle(fontWeight: FontWeight.w600)),
+                          subtitle: Text(
+                            '${p.t('soldQty')}: ${formatQty(bp.soldQty)} / ${formatQty(bp.producedQty)}'
+                            ' • ${p.t('totalSale')}: ${formatRs(bp.revenue)}'
+                            ' • ${p.t('cogs')}: ${formatRs(bp.cogs)}',
+                          ),
+                          trailing: Text(
+                            '${bp.profit >= 0 ? '+' : ''}${formatRs(bp.profit)}',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w700,
+                              color: bp.profit >= 0
+                                  ? AppColors.green
+                                  : AppColors.red,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
                     _sectionTitle('Product-wise Sales'),
                     if (d.products.isEmpty)
                       Text(p.t('noData'),
