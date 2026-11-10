@@ -86,12 +86,18 @@ class _ProductionHubScreenState extends State<ProductionHubScreen> {
         soldQty += li.qty;
         final itemId = li.itemId;
         if (itemId == null) continue;
-        var cost = costCache[itemId];
-        if (cost == null) {
-          cost = await db.getItemUnitCost(itemId);
-          costCache[itemId] = cost;
+        // Sale-time COGS snapshot first (Phase 2), current cost as
+        // the legacy fallback.
+        var lineCogs = li.costAmount;
+        if (lineCogs == null) {
+          var cost = costCache[itemId];
+          if (cost == null) {
+            cost = await db.getItemUnitCost(itemId);
+            costCache[itemId] = cost;
+          }
+          lineCogs = li.qty * cost;
         }
-        cogs += li.qty * cost;
+        cogs += lineCogs;
       }
     }
 

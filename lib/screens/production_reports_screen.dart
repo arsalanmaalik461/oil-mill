@@ -167,8 +167,12 @@ class _ProductionReportsScreenState extends State<ProductionReportsScreen> {
       for (final bi in await db.getBillItems(bill.id!)) {
         final itemId = bi.itemId;
         if (itemId == null) continue;
-        final unitCost = await costOf(itemId);
-        final lineCogs = bi.qty * unitCost;
+        // Sale-time COGS snapshot first (Phase 2): a past period's
+        // profit can no longer be rewritten by a later purchase.
+        // Legacy bills without a snapshot fall back to the current
+        // unit cost.
+        final lineCogs =
+            bi.costAmount ?? bi.qty * await costOf(itemId);
         cogs += lineCogs;
         final agg = prodAgg.putIfAbsent(
           itemId,
