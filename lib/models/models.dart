@@ -377,16 +377,22 @@ class Expense {
   final double amount;
   final String note;
   final String account;
+
+  /// Classification (Phase 4): 'operating' counts in net profit;
+  /// 'owner' (withdrawals), 'loan' (repayments) and 'transfer' are
+  /// real cash movements but NOT operating expenses.
+  final String kind;
   final DateTime dateTime;
-  Expense({this.id, required this.businessId, required this.category, required this.amount, this.note = '', this.account = 'cash', required this.dateTime});
+  Expense({this.id, required this.businessId, required this.category, required this.amount, this.note = '', this.account = 'cash', this.kind = 'operating', required this.dateTime});
   Map<String, dynamic> toMap() => {
         if (id != null) 'id': id,
         'business_id': businessId, 'category': category, 'amount': amount,
-        'note': note, 'account': account, 'date_time': dateTime.toIso8601String(),
+        'note': note, 'account': account, 'kind': kind, 'date_time': dateTime.toIso8601String(),
       };
   factory Expense.fromMap(Map<String, dynamic> m) => Expense(
         id: m['id'] as int?, businessId: m['business_id'] ?? 1, category: m['category'] ?? '',
         amount: (m['amount'] ?? 0).toDouble(), note: m['note'] ?? '', account: m['account'] ?? 'cash',
+        kind: m['kind'] ?? 'operating',
         dateTime: DateTime.tryParse(m['date_time'] ?? '') ?? DateTime.now(),
       );
 }
@@ -470,10 +476,16 @@ class ProductionBatch {
   /// Joint-cost allocation method: 'quantity' (kg-normalised) or
   /// 'value' (relative sales value of the outputs).
   final String allocationMethod;
+
+  /// Expected total recovery (outputs as % of inputs, by kg) declared
+  /// when the batch was created; compared against the actual recovery
+  /// for wastage/yield analysis (Phase 4). Null when not declared.
+  final double? expectedRecoveryPct;
   ProductionBatch({
     this.id, required this.businessId, required this.batchNo,
     required this.dateTime, this.status = 'completed', this.note = '',
     this.wastageQty = 0, this.wastageNote = '', this.allocationMethod = 'quantity',
+    this.expectedRecoveryPct,
   });
   Map<String, dynamic> toMap() => {
         if (id != null) 'id': id,
@@ -481,6 +493,7 @@ class ProductionBatch {
         'date_time': dateTime.toIso8601String(), 'status': status,
         'note': note, 'wastage_qty': wastageQty, 'wastage_note': wastageNote,
         'allocation_method': allocationMethod,
+        'expected_recovery_pct': expectedRecoveryPct,
       };
   factory ProductionBatch.fromMap(Map<String, dynamic> m) => ProductionBatch(
         id: m['id'] as int?, businessId: m['business_id'] ?? 1,
@@ -490,6 +503,7 @@ class ProductionBatch {
         wastageQty: (m['wastage_qty'] ?? 0).toDouble(),
         wastageNote: m['wastage_note'] ?? '',
         allocationMethod: m['allocation_method'] ?? 'quantity',
+        expectedRecoveryPct: (m['expected_recovery_pct'] as num?)?.toDouble(),
       );
 }
 
@@ -570,5 +584,40 @@ class ProductionExpense {
         category: m['category'] ?? 'other',
         amount: (m['amount'] ?? 0).toDouble(), note: m['note'] ?? '',
         dateTime: DateTime.tryParse(m['date_time'] ?? '') ?? DateTime.now(),
+      );
+}
+
+
+/// One frozen daily cash closing (Phase 4). Once a day is closed its
+/// figures are sealed; later edits to that day's entries surface as a
+/// mismatch warning instead of silently rewriting history.
+class DailyClosing {
+  final int? id;
+  final int businessId;
+  final String date; // yyyy-MM-dd
+  final double opening;
+  final double totalIn;
+  final double totalOut;
+  final double closing;
+  final DateTime frozenAt;
+  DailyClosing({
+    this.id, required this.businessId, required this.date,
+    required this.opening, required this.totalIn, required this.totalOut,
+    required this.closing, required this.frozenAt,
+  });
+  Map<String, dynamic> toMap() => {
+        if (id != null) 'id': id,
+        'business_id': businessId, 'date': date, 'opening': opening,
+        'total_in': totalIn, 'total_out': totalOut, 'closing': closing,
+        'frozen_at': frozenAt.toIso8601String(),
+      };
+  factory DailyClosing.fromMap(Map<String, dynamic> m) => DailyClosing(
+        id: m['id'] as int?, businessId: m['business_id'] ?? 1,
+        date: m['date'] ?? '',
+        opening: (m['opening'] ?? 0).toDouble(),
+        totalIn: (m['total_in'] ?? 0).toDouble(),
+        totalOut: (m['total_out'] ?? 0).toDouble(),
+        closing: (m['closing'] ?? 0).toDouble(),
+        frozenAt: DateTime.tryParse(m['frozen_at'] ?? '') ?? DateTime.now(),
       );
 }

@@ -18,7 +18,7 @@ class DatabaseHelper {
     final dir = await getDatabasesPath();
     return openDatabase(
       p.join(dir, 'namat_oil_mill.db'),
-      version: 9,
+      version: 10,
       onUpgrade: (d, oldVersion, newVersion) async {
         if (oldVersion < 2) {
           // v2: track when a payment reminder was last sent to each party.
@@ -53,6 +53,18 @@ class DatabaseHelper {
           // app login username (Firebase app_users record).
           await d.execute(
               "ALTER TABLE businesses ADD COLUMN app_username TEXT DEFAULT ''");
+        }
+        if (oldVersion < 10) {
+          // v10 (Phase 4 — daily accounting): frozen daily closings,
+          // expense classification, expected batch recovery.
+          await d.execute('''CREATE TABLE IF NOT EXISTS daily_closings(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, business_id INTEGER, date TEXT,
+            opening REAL, total_in REAL, total_out REAL, closing REAL,
+            frozen_at TEXT, UNIQUE(business_id, date))''');
+          await d.execute(
+              "ALTER TABLE expenses ADD COLUMN kind TEXT DEFAULT 'operating'");
+          await d.execute(
+              'ALTER TABLE production_batches ADD COLUMN expected_recovery_pct REAL');
         }
         if (oldVersion < 9) {
           // v9 (Phase 3 — transaction integrity): every bill posting
@@ -140,7 +152,7 @@ class DatabaseHelper {
           note TEXT, date_time TEXT)''');
         await d.execute('''CREATE TABLE expenses(
           id INTEGER PRIMARY KEY AUTOINCREMENT, business_id INTEGER, category TEXT, amount REAL,
-          note TEXT, account TEXT, date_time TEXT)''');
+          note TEXT, account TEXT, date_time TEXT, kind TEXT DEFAULT 'operating')''');
         await d.execute('''CREATE TABLE wallet_transactions(
           id INTEGER PRIMARY KEY AUTOINCREMENT, business_id INTEGER, channel TEXT, type TEXT,
           amount REAL, phone TEXT, note TEXT, commission REAL DEFAULT 0, date_time TEXT)''');
@@ -150,7 +162,11 @@ class DatabaseHelper {
         await d.execute('''CREATE TABLE production_batches(
           id INTEGER PRIMARY KEY AUTOINCREMENT, business_id INTEGER, batch_no INTEGER,
           date_time TEXT, status TEXT, note TEXT, wastage_qty REAL DEFAULT 0, wastage_note TEXT,
-          allocation_method TEXT DEFAULT 'quantity')''');
+          allocation_method TEXT DEFAULT 'quantity', expected_recovery_pct REAL)''');
+        await d.execute('''CREATE TABLE daily_closings(
+          id INTEGER PRIMARY KEY AUTOINCREMENT, business_id INTEGER, date TEXT,
+          opening REAL, total_in REAL, total_out REAL, closing REAL,
+          frozen_at TEXT, UNIQUE(business_id, date))''');
         await d.execute('''CREATE TABLE production_inputs(
           id INTEGER PRIMARY KEY AUTOINCREMENT, batch_id INTEGER, item_id INTEGER,
           qty REAL, rate REAL, cost REAL)''');
@@ -1172,6 +1188,130 @@ class DatabaseHelper {
             ).toMap());
       }
     });
+  }
+
+  // ---------------- Daily closings (Phase 4) ----------------
+  String _dayKey(DateTime day) =>
+      '${day.year.toString().padLeft(4, '0')}-'
+      '${day.month.toString().padLeft(2, '0')}-'
+      '${day.day.toString().padLeft(2, '0')}';
+
+  Future<DailyClosing?> getDailyClosing(int businessId, DateTime day) async {
+    final d = await db;
+    final rows = await d.query('daily_closings',
+        where: 'business_id = ? AND date = ?',
+        whereArgs: [businessId, _dayKey(day)]);
+    return rows.isEmpty ? null : DailyClosing.fromMap(rows.first);
+  }
+
+  /// Freezes a day's cash closing from the CURRENT cash_entries: the
+  /// sealed record is what Roznamcha shows from then on, so later
+  /// backdated edits surface as a mismatch instead of silently
+  /// rewriting a closed day. Re-freezing overwrites with fresh sums.
+  Future<DailyClosing> freezeDailyClosing(int businessId, DateTime day) async {
+    final live = await liveDailyClosing(businessId, day);
+    final record = DailyClosing(
+      businessId: businessId,
+      date: _dayKey(day),
+      opening: live.opening,
+      totalIn: live.totalIn,
+      totalOut: live.totalOut,
+      closing: live.closing,
+      frozenAt: DateTime.now(),
+    );
+    final d = await db;
+    await d.insert('daily_closings', record.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace);
+    return record;
+  }
+
+  /// Live (unfrozen) closing figures for a day — Roznamcha compares
+  /// these against the frozen record to detect post-close edits.
+  Future<({double opening, double totalIn, double totalOut, double closing})>
+      liveDailyClosing(int businessId, DateTime day) async {
+    final d = await db;
+    final start = DateTime(day.year, day.month, day.day);
+    final end = start.add(const Duration(days: 1));
+    final rows = await d.query('cash_entries',
+        where: 'business_id = ?', whereArgs: [businessId]);
+    var openNet = 0.0, dayIn = 0.0, dayOut = 0.0;
+    for (final r in rows) {
+      final e = CashEntry.fromMap(r);
+      if (e.dateTime.isBefore(start)) {
+        openNet += e.type == 'in' ? e.amount : -e.amount;
+      } else if (e.dateTime.isBefore(end)) {
+        if (e.type == 'in') {
+          dayIn += e.amount;
+        } else {
+          dayOut += e.amount;
+        }
+      }
+    }
+    return (
+      opening: openNet,
+      totalIn: dayIn,
+      totalOut: dayOut,
+      closing: openNet + dayIn - dayOut
+    );
+  }
+
+  /// Yield / wastage analysis for one batch (Phase 4): everything in
+  /// kg (litres converted through item density, mann = 40). The
+  /// recorded wastage is treated as kg. [recoveryPct] is what actually
+  /// came out; [accountedPct] adds the recorded wastage back — the gap
+  /// to 100% is unexplained loss.
+  Future<
+      ({
+        double inputKg,
+        double outputKg,
+        double wastageKg,
+        double recoveryPct,
+        double accountedPct
+      })> getBatchRecovery(int batchId) async {
+    final d = await db;
+    double kgFactor(String unit, double? density) {
+      final u = unit.toLowerCase();
+      if (u.contains('ton')) return 1000;
+      if (u.contains('mann') || u.contains('maund') || u.contains('mun')) {
+        return 40;
+      }
+      if (u.contains('litre') || u.contains('liter') || u.contains('ltr')) {
+        return density ?? 1;
+      }
+      if (u.contains('40')) return 40;
+      return 1;
+    }
+
+    Future<double> kgOf(String table) async {
+      final rows = await d.rawQuery(
+          'SELECT t.qty AS q, i.unit AS u, i.density AS den '
+          'FROM $table t JOIN items i ON i.id = t.item_id '
+          'WHERE t.batch_id = ?',
+          [batchId]);
+      var total = 0.0;
+      for (final r in rows) {
+        total += (r['q'] as num).toDouble() *
+            kgFactor(r['u'] as String? ?? '', (r['den'] as num?)?.toDouble());
+      }
+      return total;
+    }
+
+    final inputKg = await kgOf('production_inputs');
+    final outputKg = await kgOf('production_outputs');
+    final brows = await d.query('production_batches',
+        columns: ['wastage_qty'], where: 'id = ?', whereArgs: [batchId]);
+    final wastageKg =
+        brows.isEmpty ? 0.0 : (brows.first['wastage_qty'] as num).toDouble();
+    final recovery = inputKg > 0 ? outputKg / inputKg * 100 : 0.0;
+    final accounted =
+        inputKg > 0 ? (outputKg + wastageKg) / inputKg * 100 : 0.0;
+    return (
+      inputKg: inputKg,
+      outputKg: outputKg,
+      wastageKg: wastageKg,
+      recoveryPct: recovery,
+      accountedPct: accounted
+    );
   }
 
   // ---------------- Production & Manufacturing ----------------
