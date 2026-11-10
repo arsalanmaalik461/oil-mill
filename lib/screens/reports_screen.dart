@@ -59,11 +59,64 @@ class ReportsScreen extends StatefulWidget {
 
 class _ReportsScreenState extends State<ReportsScreen> {
   late Future<_ReportData> _future;
+  late Future<int> _issuesFuture;
 
   @override
   void initState() {
     super.initState();
-    _future = _load(context.read<AppProvider>().businessId);
+    final bizId = context.read<AppProvider>().businessId;
+    _future = _load(bizId);
+    _issuesFuture =
+        DatabaseHelper.instance.countDeletedBillsWithPostings(bizId);
+  }
+
+  /// Book Check card (Phase 3): warns when soft-deleted bills still
+  /// have postings in stock/ledger/cash (written before the reversal
+  /// engine) and offers a one-tap repair.
+  Widget _bookCheckCard(AppProvider p) {
+    return FutureBuilder<int>(
+      future: _issuesFuture,
+      builder: (c, snap) {
+        if (snap.connectionState == ConnectionState.waiting) {
+          return const SizedBox.shrink();
+        }
+        final n = snap.data ?? 0;
+        if (n == 0) {
+          return Card(
+            color: AppColors.green.withValues(alpha: 0.08),
+            child: ListTile(
+              dense: true,
+              leading: const Icon(Icons.verified, color: AppColors.green),
+              title: Text('${p.t('bookCheck')}: ${p.t('bookCheckOk')}',
+                  style: const TextStyle(fontSize: 13)),
+            ),
+          );
+        }
+        return Card(
+          color: AppColors.accent.withValues(alpha: 0.12),
+          child: ListTile(
+            dense: true,
+            leading: const Icon(Icons.warning_amber, color: AppColors.accent),
+            title: Text('$n ${p.t('bookCheckIssues')}',
+                style: const TextStyle(fontSize: 13)),
+            trailing: TextButton(
+              onPressed: () async {
+                final bizId = context.read<AppProvider>().businessId;
+                await DatabaseHelper.instance.repairDeletedBills(bizId);
+                if (!mounted) return;
+                showSnack(context, p.t('repaired'));
+                setState(() {
+                  _future = _load(bizId);
+                  _issuesFuture = DatabaseHelper.instance
+                      .countDeletedBillsWithPostings(bizId);
+                });
+              },
+              child: Text(p.t('repair')),
+            ),
+          ),
+        );
+      },
+    );
   }
 
   Future<_ReportData> _load(int bizId) async {
@@ -308,6 +361,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
           return ListView(
             padding: const EdgeInsets.fromLTRB(12, 4, 12, 20),
             children: [
+              _bookCheckCard(p),
               Card(
                 color: AppColors.primary.withValues(alpha: 0.08),
                 shape: RoundedRectangleBorder(
