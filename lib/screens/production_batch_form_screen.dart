@@ -272,7 +272,9 @@ class _ProductionBatchFormScreenState extends State<ProductionBatchFormScreen> {
 
             // ---------------- Outputs (finished goods) ----------------
             _sectionTitle(p.t('finishedProduct')),
-            Row(
+            Wrap(
+              spacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 Text('${p.t('allocMethod')}: ',
                     style: const TextStyle(
@@ -282,7 +284,6 @@ class _ProductionBatchFormScreenState extends State<ProductionBatchFormScreen> {
                   selected: _allocMethod == 'quantity',
                   onSelected: (_) => setState(() => _allocMethod = 'quantity'),
                 ),
-                const SizedBox(width: 8),
                 ChoiceChip(
                   label: Text(p.t('allocValue')),
                   selected: _allocMethod == 'value',

@@ -33,6 +33,27 @@ class _StaffDetailScreenState extends State<StaffDetailScreen> {
 
   String get _monthPrefix => DateFormat('yyyy-MM').format(DateTime.now());
 
+  Future<void> _deletePayment(AppProvider p, SalaryPayment pay) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(p.t('deleteEntry')),
+        content: Text('${_typeLabel(p, pay.type)} • ${formatRs(pay.amount)}'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(p.t('cancel'))),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(p.t('delete'))),
+        ],
+      ),
+    );
+    if (ok != true || pay.id == null) return;
+    await _db.deleteSalaryPayment(pay.id!);
+    _load();
+  }
+
   Future<void> _load() async {
     final att = await _db.getAttendance(_staff.id!, monthPrefix: _monthPrefix);
     final pays = await _db.getSalaryPayments(_staff.id!);
@@ -348,7 +369,17 @@ class _StaffDetailScreenState extends State<StaffDetailScreen> {
                           '${dateTimeFmt.format(pay.dateTime)}${pay.note.isNotEmpty ? ' • ${pay.note}' : ''}',
                           style: const TextStyle(fontSize: 12),
                         ),
-                        trailing: AmountText(pay.amount),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            AmountText(pay.amount),
+                            IconButton(
+                              icon: const Icon(Icons.delete_outline,
+                                  size: 20, color: AppColors.red),
+                              onPressed: () => _deletePayment(p, pay),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),

@@ -672,12 +672,15 @@ class _RoznamchaScreenState extends State<RoznamchaScreen> {
             children: [
               const Icon(Icons.lock, size: 16, color: AppColors.green),
               const SizedBox(width: 6),
-              Text(
-                '${p.t('dayClosed')} • ${dateTimeFmt.format(d.frozen!.frozenAt)}',
-                style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.green),
+              Expanded(
+                child: Text(
+                  '${p.t('dayClosed')} • ${dateTimeFmt.format(d.frozen!.frozenAt)}',
+                  style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.green),
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
             ],
           ),
@@ -788,11 +791,13 @@ class _RoznamchaScreenState extends State<RoznamchaScreen> {
             children: [
               const Icon(Icons.factory, size: 18, color: Color(0xFFE65100)),
               const SizedBox(width: 8),
-              Text(
-                isUrdu ? 'آج کا پیداواری کام (Crushing & Output)' : 'Today\'s Crushing & Production',
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xFFE65100)),
+              Expanded(
+                child: Text(
+                  isUrdu ? 'آج کا پیداواری کام (Crushing & Output)' : 'Today\'s Crushing & Production',
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xFFE65100)),
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
-              const Spacer(),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                 decoration: BoxDecoration(

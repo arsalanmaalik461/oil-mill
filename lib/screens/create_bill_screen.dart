@@ -40,6 +40,7 @@ class _CreateBillScreenState extends State<CreateBillScreen> {
   final _rateCtrl = TextEditingController();
   final List<_BillLine> _lines = [];
   String _status = 'paid';
+  String _method = 'cash';
   DateTime _when = DateTime.now();
   bool _saving = false;
 
@@ -53,6 +54,7 @@ class _CreateBillScreenState extends State<CreateBillScreen> {
     final ex = widget.existing;
     if (ex != null) {
       _status = ex.status;
+      _method = ex.method;
       _when = ex.dateTime;
     }
     _load();
@@ -140,6 +142,7 @@ class _CreateBillScreenState extends State<CreateBillScreen> {
       total: _total,
       status: _status,
       dateTime: _when,
+      method: _method,
     );
     final items = _lines
         .map((l) => BillItem(
@@ -161,6 +164,7 @@ class _CreateBillScreenState extends State<CreateBillScreen> {
         total: _total,
         status: _status,
         dateTime: _when,
+        method: _method,
       );
       await _db.updateBill(bill: edited, items: items);
     } else {
@@ -324,6 +328,34 @@ class _CreateBillScreenState extends State<CreateBillScreen> {
                     ),
                   ],
                 ),
+                if (_status == 'paid') ...[
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Text('${p.t('payMethod')}: ',
+                          style:
+                              const TextStyle(fontWeight: FontWeight.w600)),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      for (final m in const [
+                        ('cash', 'cashLabel'),
+                        ('bank', 'bank'),
+                        ('jazzcash', 'jazzcash'),
+                        ('easypaisa', 'easypaisa'),
+                      ])
+                        ChoiceChip(
+                          label: Text(p.t(m.$2)),
+                          selected: _method == m.$1,
+                          onSelected: (_) =>
+                              setState(() => _method = m.$1),
+                        ),
+                    ],
+                  ),
+                ],
               ],
             ),
           ),
