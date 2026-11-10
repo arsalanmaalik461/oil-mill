@@ -10,7 +10,7 @@ void main() {
   databaseFactory = databaseFactoryFfi;
   final helper = DatabaseHelper.instance;
 
-  test('v1 database upgrades to v6 without losing data', () async {
+  test('v1 database upgrades to v8 without losing data', () async {
     final path = '${await getDatabasesPath()}/namat_oil_mill.db';
     await databaseFactoryFfi.deleteDatabase(path);
 
@@ -97,9 +97,9 @@ void main() {
     });
     await old.close();
 
-    // --- Open with the CURRENT app (v6): migration must keep everything.
+    // --- Open with the CURRENT app (v8): migration must keep everything.
     final d = await helper.db;
-    expect(await d.getVersion(), 6);
+    expect(await d.getVersion(), 8);
     final party = await helper.getParty(partyId);
     expect(party, isNotNull);
     expect(party!.name, 'Purana Customer');
@@ -111,8 +111,13 @@ void main() {
     expect(item.name, 'Sarson');
     expect(item.kind, 'general'); // new column defaults safely
     expect(await helper.getItemQty(itemId), 500); // 100 opening + 400 in
+    // v7/v8 columns exist and default safely on old rows
+    final oldTxn = await helper.getPartyTransactions(partyId);
+    expect(oldTxn.single.method, 'cash'); // v7 default
     final bills = await helper.getBills(1);
     expect(bills.single.total, 3000);
+    final oldBillItems = await helper.getBillItems(bills.single.id!);
+    expect(oldBillItems.single.costAmount, isNull); // v8 snapshot: legacy = null
     // New tables exist and work after upgrade
     expect(await helper.getProductionBatches(1), isEmpty);
     expect(await helper.getQrPayments(1), isEmpty);

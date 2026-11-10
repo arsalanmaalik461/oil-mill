@@ -48,16 +48,6 @@ class _ReportData {
   });
 }
 
-/// Rate used for stock valuation: the item's most recent stock 'in' rate
-/// (transactions come back newest-first), falling back to the most recent
-/// transaction rate of any type, else 0.
-double _latestRate(List<StockTransaction> txns) {
-  for (final t in txns) {
-    if (t.type == 'in') return t.rate;
-  }
-  return txns.isEmpty ? 0 : txns.first.rate;
-}
-
 /// Business reports: daily / monthly summary cards plus PDF exports for
 /// cash, party and stock reports.
 class ReportsScreen extends StatefulWidget {
@@ -133,7 +123,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
         final q = await db.getItemQty(item.id!);
         itemQtys[item.id!] = q;
         if (q <= item.lowStockLimit) lowCount++;
-        final rate = _latestRate(await db.getStockTransactions(item.id!));
+        // One valuation method for the whole app (Phase 2): the
+        // perpetual unit cost, same as Production screens and COGS.
+        final rate = await db.getItemUnitCost(item.id!);
         itemRates[item.id!] = rate;
         stockValue += q * rate;
       }
