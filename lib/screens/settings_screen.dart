@@ -49,6 +49,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   GoogleSignInAccount? _googleAccount;
   bool _googleBusy = false;
   bool _autoDriveBackup = true;
+  String? _backupStatus;
+  String? _backupWhen;
   bool _accountBusy = false;
   bool _syncBusy = false;
   bool _restoreBusy = false;
@@ -85,6 +87,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _businesses = list;
       _pinSet = prefs.getString('pin_hash') != null;
       _autoDriveBackup = prefs.getBool('auto_drive_backup_enabled') ?? true;
+      _backupStatus = prefs.getString('drive_backup_status');
+      _backupWhen = prefs.getString('last_auto_drive_backup_time') ??
+          prefs.getString('drive_backup_last_attempt');
       _loading = false;
       final cur = _current(list, bizId);
       if (cur != null && !_filled) {
@@ -520,6 +525,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
     if (!mounted) return;
     setState(() => _googleAccount = null);
+  }
+
+  /// Restore test: verifies the newest Drive backup is complete and
+  /// readable, without changing any live data.
+  Future<void> _verifyDriveBackup(AppProvider p) async {
+    setState(() => _googleBusy = true);
+    try {
+      final r = await _drive.verifyLatestBackup();
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (c) => AlertDialog(
+          title: Text(p.t('testRestore')),
+          content: Text('${p.t('restoreTestOk')}\n\n'
+              '${r['file']}\n'
+              '${r['tables']} tables - ${r['rows']} entries - ${r['sizeKb']} KB'),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(c), child: const Text('OK')),
+          ],
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        showSnack(
+            context,
+            e.toString().contains('no-backup')
+                ? p.t('noDriveBackup')
+                : p.t('restoreTestFailed'));
+      }
+    } finally {
+      if (mounted) setState(() => _googleBusy = false);
+    }
   }
 
   Future<void> _uploadBackupJsonToDrive(AppProvider p) async {
@@ -1048,6 +1086,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       final prefs = await SharedPreferences.getInstance();
                       await prefs.setBool('auto_drive_backup_enabled', v);
                     },
+                  ),
+                  ListTile(
+                    leading: Icon(
+                        _backupStatus == 'failed'
+                            ? Icons.cloud_off
+                            : Icons.cloud_done,
+                        color: _backupStatus == 'failed'
+                            ? AppColors.red
+                            : AppColors.primary),
+                    title: Text(p.t('lastBackup')),
+                    subtitle: Text(_backupStatus == null
+                        ? p.t('backupNever')
+                        : '${_backupStatus == 'failed' ? p.t('backupStatusFailed') : p.t('backupStatusOk')}'
+                            '${_backupWhen != null ? ' - ${DateFormat('dd MMM, hh:mm a').format(DateTime.parse(_backupWhen!))}' : ''}'),
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.fact_check,
+                        color: AppColors.primary),
+                    title: Text(p.t('testRestore')),
+                    trailing: _googleBusy
+                        ? const SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : null,
+                    onTap: _googleBusy ? null : () => _verifyDriveBackup(p),
                   ),
                   ListTile(
                     leading: const Icon(Icons.logout, color: AppColors.primary),

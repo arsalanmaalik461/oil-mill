@@ -1,3 +1,4 @@
+import 'backup_notifier.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
@@ -166,12 +167,13 @@ class GoogleDriveService {
   /// Automatically executes daily midnight backup to Google Drive if due.
   /// Runs silently in the background without disturbing the user.
   Future<bool> runAutoBackupIfDue() async {
+    final prefs = await SharedPreferences.getInstance();
     try {
-      final prefs = await SharedPreferences.getInstance();
       final enabled = prefs.getBool('auto_drive_backup_enabled') ?? true;
       if (!enabled) return false;
 
-      // Ensure signed in silently
+      // Ensure signed in silently. Not being signed in is NOT a failure —
+      // the backup simply is not connected yet.
       if (currentAccount == null) {
         final silent = await _googleSignIn.signInSilently();
         if (silent == null) return false;
@@ -190,12 +192,49 @@ class GoogleDriveService {
       await prefs.setString('last_auto_drive_backup_date', todayStr);
       await prefs.setString(
           'last_auto_drive_backup_time', DateTime.now().toIso8601String());
+      await prefs.setString('drive_backup_status', 'ok');
+      await prefs.remove('drive_backup_error');
       debugPrint('Automated Google Drive daily backup completed: $fileName');
       return true;
     } catch (e) {
-      debugPrint('Automated Drive backup skipped or error: $e');
+      // A real failure (network, quota, export error): record it where
+      // Settings can show it, and notify the owner.
+      await prefs.setString('drive_backup_status', 'failed');
+      await prefs.setString('drive_backup_error', '$e');
+      await prefs.setString('drive_backup_last_attempt',
+          DateTime.now().toIso8601String());
+      debugPrint('Automated Drive backup FAILED: $e');
+      await BackupNotifier.instance.showBackupFailed();
       return false;
     }
+  }
+
+  /// Restore test: downloads the newest Drive backup and verifies it is
+  /// a complete, readable Namat Oil Mill backup (app marker present and
+  /// row counts readable) WITHOUT touching the live data. Returns a
+  /// summary map, or throws when no valid backup exists.
+  Future<Map<String, dynamic>> verifyLatestBackup() async {
+    final files = await listBackups();
+    if (files.isEmpty) throw StateError('no-backup');
+    final latest = files.first;
+    final content = await downloadFile(latest.id!);
+    final data = jsonDecode(content) as Map<String, dynamic>;
+    if (data['app'] != 'namat_oil_mill') throw StateError('bad-file');
+    var rows = 0;
+    var tables = 0;
+    for (final e in data.entries) {
+      if (e.key == 'app' || e.key == 'version') continue;
+      if (e.value is List) {
+        tables++;
+        rows += (e.value as List).length;
+      }
+    }
+    return {
+      'file': latest.name ?? '',
+      'rows': rows,
+      'tables': tables,
+      'sizeKb': ((int.tryParse(latest.size ?? '') ?? 0) / 1024).round(),
+    };
   }
 
   /// Starts a periodic background timer (every 30 mins) to check if midnight /
