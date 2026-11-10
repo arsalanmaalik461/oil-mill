@@ -316,6 +316,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await shareFilePath(file.path);
   }
 
+  /// After an import, push the data to the signed-in user's cloud area
+  /// in the background, so the Firebase backup is complete without the
+  /// user having to press the sync button.
+  void _autoSyncAfterImport(AppProvider p) {
+    if (!p.isLoggedIn) return;
+    unawaited(() async {
+      try {
+        await FirebaseService.instance
+            .syncUserData(p.sessionUsername, p.businessId);
+      } catch (_) {}
+    }());
+  }
+
   Future<void> _importBackup(AppProvider p) async {
     final proceed = await showDialog<bool>(
       context: context,
@@ -350,6 +363,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (!mounted) return;
       p.bump();
       showSnack(context, p.t('restored'));
+      _autoSyncAfterImport(p);
       _filled = false;
       await _load();
     } catch (e) {
@@ -401,6 +415,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (!mounted) return;
       p.bump();
       showSnack(context, p.t('importedToAccount'));
+      _autoSyncAfterImport(p);
       _filled = false;
       await _load();
     } catch (e) {
