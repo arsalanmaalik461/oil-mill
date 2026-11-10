@@ -44,6 +44,14 @@ class _RoznamchaSnapshot {
   final double totalKhalKg;
   final double totalExpellerExpense;
 
+  /// The frozen closing record for this date, when the day has been
+  /// closed (Phase 4). Display figures come from it, not live sums.
+  final DailyClosing? frozen;
+
+  /// True when live sums no longer match the frozen record — entries
+  /// were edited/backdated after the day was closed.
+  final bool mismatch;
+
   _RoznamchaSnapshot({
     required this.business,
     required this.date,
@@ -57,6 +65,8 @@ class _RoznamchaSnapshot {
     required this.totalOilKg,
     required this.totalKhalKg,
     required this.totalExpellerExpense,
+    this.frozen,
+    this.mismatch = false,
   });
 }
 
@@ -281,19 +291,36 @@ class _RoznamchaScreenState extends State<RoznamchaScreen> {
       }
     }
 
+    // Frozen day (Phase 4): sealed figures win; live sums are only
+    // used to detect post-close edits.
+    final frozen = await db.getDailyClosing(bizId, date);
+    var showOpening = openingCash;
+    var showIn = dayCashIn;
+    var showOut = dayCashOut;
+    var mismatch = false;
+    if (frozen != null) {
+      mismatch = (frozen.opening - openingCash).abs() > 0.005 ||
+          (frozen.totalIn - dayCashIn).abs() > 0.005 ||
+          (frozen.totalOut - dayCashOut).abs() > 0.005;
+      showOpening = frozen.opening;
+      showIn = frozen.totalIn;
+      showOut = frozen.totalOut;
+    }
     return _RoznamchaSnapshot(
       business: business,
       date: date,
-      openingCash: openingCash,
-      dayInflow: dayCashIn,
-      dayOutflow: dayCashOut,
-      closingCash: openingCash + dayCashIn - dayCashOut,
+      openingCash: showOpening,
+      dayInflow: showIn,
+      dayOutflow: showOut,
+      closingCash: showOpening + showIn - showOut,
       entries: entries,
       batchCount: batchCount,
       totalInputKg: totalInputKg,
       totalOilKg: totalOilKg,
       totalKhalKg: totalKhalKg,
       totalExpellerExpense: totalExpellerExpense,
+      frozen: frozen,
+      mismatch: mismatch,
     );
   }
 
@@ -433,7 +460,7 @@ class _RoznamchaScreenState extends State<RoznamchaScreen> {
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                   children: [
                     // 4 Balance Summary Cards
-                    _buildBalanceMatrix(data, isUrdu),
+                    _buildBalanceMatrix(p, data, isUrdu),
 
                     const SizedBox(height: 12),
 
@@ -588,7 +615,7 @@ class _RoznamchaScreenState extends State<RoznamchaScreen> {
     );
   }
 
-  Widget _buildBalanceMatrix(_RoznamchaSnapshot d, bool isUrdu) {
+  Widget _buildBalanceMatrix(AppProvider p, _RoznamchaSnapshot d, bool isUrdu) {
     return Column(
       children: [
         Row(
@@ -639,6 +666,56 @@ class _RoznamchaScreenState extends State<RoznamchaScreen> {
             ),
           ],
         ),
+        const SizedBox(height: 10),
+        if (d.frozen != null) ...[
+          Row(
+            children: [
+              const Icon(Icons.lock, size: 16, color: AppColors.green),
+              const SizedBox(width: 6),
+              Text(
+                '${p.t('dayClosed')} • ${dateTimeFmt.format(d.frozen!.frozenAt)}',
+                style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.green),
+              ),
+            ],
+          ),
+          if (d.mismatch) ...[
+            const SizedBox(height: 6),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: AppColors.accent.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.warning_amber,
+                      size: 18, color: AppColors.accent),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(p.t('dayMismatch'),
+                        style: const TextStyle(fontSize: 12)),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ] else
+          Align(
+            alignment: Alignment.centerRight,
+            child: OutlinedButton.icon(
+              onPressed: () async {
+                final bizId = context.read<AppProvider>().businessId;
+                await DatabaseHelper.instance
+                    .freezeDailyClosing(bizId, d.date);
+                if (mounted) _reload();
+              },
+              icon: const Icon(Icons.lock_clock, size: 16),
+              label: Text(p.t('closeDay')),
+            ),
+          ),
       ],
     );
   }
