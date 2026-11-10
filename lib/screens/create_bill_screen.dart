@@ -11,12 +11,19 @@ class _BillLine {
   String name;
   double qty;
   double rate;
-  _BillLine({this.item, this.name = '', this.qty = 1, this.rate = 0});
+
+  /// Original sale-time COGS snapshot when editing an existing bill;
+  /// null for brand-new lines (priced at save time).
+  double? costRate;
+  _BillLine({this.item, this.name = '', this.qty = 1, this.rate = 0, this.costRate});
   double get amount => qty * rate;
 }
 
 class CreateBillScreen extends StatefulWidget {
-  const CreateBillScreen({super.key});
+  /// When set, the screen edits this bill (same bill number; the old
+  /// postings are reversed and re-posted atomically on save).
+  final Bill? existing;
+  const CreateBillScreen({super.key, this.existing});
 
   @override
   State<CreateBillScreen> createState() => _CreateBillScreenState();
@@ -38,9 +45,16 @@ class _CreateBillScreenState extends State<CreateBillScreen> {
 
   double get _total => _lines.fold<double>(0, (s, l) => s + l.amount);
 
+  bool get _isEdit => widget.existing != null;
+
   @override
   void initState() {
     super.initState();
+    final ex = widget.existing;
+    if (ex != null) {
+      _status = ex.status;
+      _when = ex.dateTime;
+    }
     _load();
   }
 
@@ -66,6 +80,29 @@ class _CreateBillScreenState extends State<CreateBillScreen> {
       _parties = parties;
       _items = items;
     });
+    final ex = widget.existing;
+    if (ex != null) {
+      final billItems = await _db.getBillItems(ex.id!);
+      if (!mounted) return;
+      setState(() {
+        if (ex.partyId != null) {
+          for (final party in parties) {
+            if (party.id == ex.partyId) _customer = party;
+          }
+        }
+        _lines
+          ..clear()
+          ..addAll(billItems.map((bi) => _BillLine(
+                item: items
+                    .where((i) => i.id != null && i.id == bi.itemId)
+                    .firstOrNull,
+                name: bi.name,
+                qty: bi.qty,
+                rate: bi.rate,
+                costRate: bi.costRate,
+              )));
+      });
+    }
   }
 
   void _addLine() {
@@ -94,7 +131,7 @@ class _CreateBillScreenState extends State<CreateBillScreen> {
     }
     setState(() => _saving = true);
     final bizId = p.businessId;
-    final billNo = await _db.nextBillNo(bizId);
+    final billNo = widget.existing?.billNo ?? await _db.nextBillNo(bizId);
     final bill = Bill(
       businessId: bizId,
       billNo: billNo,
@@ -106,14 +143,29 @@ class _CreateBillScreenState extends State<CreateBillScreen> {
     );
     final items = _lines
         .map((l) => BillItem(
-              billId: 0,
+              billId: widget.existing?.id ?? 0,
               itemId: l.item?.id,
               name: l.name,
               qty: l.qty,
               rate: l.rate,
+              costRate: l.costRate,
             ))
         .toList();
-    await _db.createBill(businessId: bizId, bill: bill, items: items);
+    if (_isEdit) {
+      final edited = Bill(
+        id: widget.existing!.id,
+        businessId: bizId,
+        billNo: widget.existing!.billNo,
+        partyId: _customer?.id,
+        partyName: _customer?.name ?? p.t('cashCustomer'),
+        total: _total,
+        status: _status,
+        dateTime: _when,
+      );
+      await _db.updateBill(bill: edited, items: items);
+    } else {
+      await _db.createBill(businessId: bizId, bill: bill, items: items);
+    }
     if (!mounted) return;
     showSnack(context, p.t('savedSuccessfully'));
     Navigator.pop(context, true);
@@ -123,7 +175,10 @@ class _CreateBillScreenState extends State<CreateBillScreen> {
   Widget build(BuildContext context) {
     final p = context.watch<AppProvider>();
     return Scaffold(
-      appBar: AppBar(title: Text(p.t('createBill'))),
+      appBar: AppBar(
+          title: Text(_isEdit
+              ? '${p.t('editBill')} #${widget.existing!.billNo}'
+              : p.t('createBill'))),
       body: Column(
         children: [
           Expanded(
@@ -131,7 +186,7 @@ class _CreateBillScreenState extends State<CreateBillScreen> {
               padding: const EdgeInsets.all(12),
               children: [
                 DropdownButtonFormField<Party?>(
-                  initialValue: _customer,
+                  value: _customer,
                   decoration: InputDecoration(labelText: p.t('customer')),
                   items: [
                     DropdownMenuItem<Party?>(

@@ -6,6 +6,7 @@ import '../providers/app_provider.dart';
 import '../theme/app_theme.dart';
 import '../utils/helpers.dart';
 import '../utils/pdf_service.dart';
+import 'create_bill_screen.dart';
 
 class BillDetailScreen extends StatefulWidget {
   final Bill bill;
@@ -201,6 +202,24 @@ class _BillDetailScreenState extends State<BillDetailScreen> {
                       ),
                     ),
                     const SizedBox(width: 8),
+                    IconButton(
+                      onPressed: () async {
+                        final done = await Navigator.push<bool>(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) =>
+                                CreateBillScreen(existing: _bill),
+                          ),
+                        );
+                        if (done == true && mounted) {
+                          // The bill changed under us; leave with a
+                          // refresh signal for the book list.
+                          Navigator.pop(context, true);
+                        }
+                      },
+                      icon: const Icon(Icons.edit, color: AppColors.primary),
+                      tooltip: p.t('editBill'),
+                    ),
                     IconButton(
                       onPressed: _delete,
                       icon: const Icon(Icons.delete, color: AppColors.red),
