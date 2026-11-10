@@ -4,6 +4,7 @@ import '../db/database_helper.dart';
 import '../models/models.dart';
 import '../providers/app_provider.dart';
 import '../theme/app_theme.dart';
+import 'owner_dashboard_screen.dart';
 import 'cash_book_screen.dart';
 import 'roznamcha_screen.dart';
 import 'stock_book_screen.dart';
@@ -43,6 +44,7 @@ class MoreScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final p = context.watch<AppProvider>();
     final modules = <_Module>[
+      _Module('ownerDashboard', Icons.dashboard, const OwnerDashboardScreen()),
       _Module('cashBook', Icons.book, CashBookScreen()),
       _Module('roznamcha', Icons.auto_stories, const RoznamchaScreen()),
       _Module('stockBook', Icons.inventory_2, StockBookScreen()),
