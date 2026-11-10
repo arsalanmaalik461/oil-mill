@@ -577,6 +577,7 @@ class DatabaseHelper {
         status: bill.status,
         dateTime: bill.dateTime,
         deleted: bill.deleted,
+        method: bill.method,
       );
       await _postBillEntries(txn, businessId, posted, enriched);
       return billId;
