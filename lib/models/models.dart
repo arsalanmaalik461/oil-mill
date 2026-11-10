@@ -35,16 +35,21 @@ class Party {
 
   /// When the last payment reminder was sent to this party (null = never).
   final DateTime? lastReminderAt;
+
+  /// Optional payment due date ("Set Date" on the party screen).
+  final DateTime? dueDate;
   Party({
     this.id, required this.businessId, required this.type, required this.name,
     this.phone = '', this.address = '', this.openingBalance = 0, this.deleted = 0,
     this.lastReminderAt,
+    this.dueDate,
   });
   Map<String, dynamic> toMap() => {
         if (id != null) 'id': id,
         'business_id': businessId, 'type': type, 'name': name, 'phone': phone,
         'address': address, 'opening_balance': openingBalance, 'deleted': deleted,
         'last_reminder_at': lastReminderAt?.toIso8601String(),
+        'due_date': dueDate?.toIso8601String(),
       };
   factory Party.fromMap(Map<String, dynamic> m) => Party(
         id: m['id'] as int?, businessId: m['business_id'] ?? 1, type: m['type'] ?? 'customer',
@@ -53,6 +58,9 @@ class Party {
         // Old backups / rows may not carry the column at all.
         lastReminderAt: (m['last_reminder_at'] as String?)?.isNotEmpty == true
             ? DateTime.tryParse(m['last_reminder_at'] as String)
+            : null,
+        dueDate: (m['due_date'] as String?)?.isNotEmpty == true
+            ? DateTime.tryParse(m['due_date'] as String)
             : null,
       );
 }

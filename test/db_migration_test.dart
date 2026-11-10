@@ -4,13 +4,13 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:oilmill/db/database_helper.dart';
 
 /// Data-safety check: a database created by the OLD app (schema v1) must
-/// upgrade to v4 with ZERO data loss — same parties, balances, stock, bills.
+/// upgrade to the current version with ZERO data loss — same parties, balances, stock, bills.
 void main() {
   sqfliteFfiInit();
   databaseFactory = databaseFactoryFfi;
   final helper = DatabaseHelper.instance;
 
-  test('v1 database upgrades to v5 without losing data', () async {
+  test('v1 database upgrades to v6 without losing data', () async {
     final path = '${await getDatabasesPath()}/namat_oil_mill.db';
     await databaseFactoryFfi.deleteDatabase(path);
 
@@ -97,12 +97,13 @@ void main() {
     });
     await old.close();
 
-    // --- Open with the CURRENT app (v5): migration must keep everything.
+    // --- Open with the CURRENT app (v6): migration must keep everything.
     final d = await helper.db;
-    expect(await d.getVersion(), 5);
+    expect(await d.getVersion(), 6);
     final party = await helper.getParty(partyId);
     expect(party, isNotNull);
     expect(party!.name, 'Purana Customer');
+    expect(party.dueDate, isNull); // v6 column exists, empty for old rows
     // Balance = opening 2000 + udhaar 5000 (bill udhaar posting is a
     // party_transaction in real usage; here opening+txn only)
     expect(await helper.getPartyBalance(partyId), 7000);

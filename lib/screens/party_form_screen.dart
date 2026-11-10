@@ -172,6 +172,8 @@ class _PartyFormScreenState extends State<PartyFormScreen> {
       address: _address.text.trim(),
       openingBalance: signed,
       deleted: widget.party?.deleted ?? 0,
+      lastReminderAt: widget.party?.lastReminderAt,
+      dueDate: widget.party?.dueDate,
     );
     final db = DatabaseHelper.instance;
     if (_editing) {

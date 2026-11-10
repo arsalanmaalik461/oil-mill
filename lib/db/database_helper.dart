@@ -18,7 +18,7 @@ class DatabaseHelper {
     final dir = await getDatabasesPath();
     return openDatabase(
       p.join(dir, 'namat_oil_mill.db'),
-      version: 5,
+      version: 6,
       onUpgrade: (d, oldVersion, newVersion) async {
         if (oldVersion < 2) {
           // v2: track when a payment reminder was last sent to each party.
@@ -54,6 +54,11 @@ class DatabaseHelper {
           await d.execute(
               "ALTER TABLE businesses ADD COLUMN app_username TEXT DEFAULT ''");
         }
+        if (oldVersion < 6) {
+          // v6: optional payment due date on a party (the original app's
+          // "Set Date" on the party screen).
+          await d.execute('ALTER TABLE parties ADD COLUMN due_date TEXT');
+        }
       },
       onCreate: (d, v) async {
         await d.execute('''CREATE TABLE businesses(
@@ -61,7 +66,7 @@ class DatabaseHelper {
         await d.execute('''CREATE TABLE parties(
           id INTEGER PRIMARY KEY AUTOINCREMENT, business_id INTEGER, type TEXT, name TEXT,
           phone TEXT, address TEXT, opening_balance REAL DEFAULT 0, deleted INTEGER DEFAULT 0,
-          last_reminder_at TEXT, created_at TEXT)''');
+          last_reminder_at TEXT, created_at TEXT, due_date TEXT)''');
         await d.execute('''CREATE TABLE party_transactions(
           id INTEGER PRIMARY KEY AUTOINCREMENT, party_id INTEGER, type TEXT, amount REAL,
           note TEXT, date_time TEXT, attachment_path TEXT)''');
@@ -204,6 +209,25 @@ class DatabaseHelper {
 
   Future<void> deletePartyTransaction(int id) async =>
       (await db).delete('party_transactions', where: 'id = ?', whereArgs: [id]);
+
+  Future<void> updatePartyTransaction(PartyTransaction t) async => (await db)
+      .update('party_transactions', t.toMap(), where: 'id = ?', whereArgs: [t.id]);
+
+  /// Latest ledger activity per party (partyId -> newest entry time) for
+  /// one business; parties with no entries are absent from the map.
+  Future<Map<int, DateTime>> getPartyLastActivity(int businessId) async {
+    final d = await db;
+    final rows = await d.rawQuery(
+      'SELECT t.party_id AS pid, MAX(t.date_time) AS last_at '
+      'FROM party_transactions t JOIN parties p ON p.id = t.party_id '
+      'WHERE p.business_id = ? GROUP BY t.party_id',
+      [businessId],
+    );
+    return {
+      for (final r in rows)
+        (r['pid'] as num).toInt(): DateTime.parse(r['last_at'] as String),
+    };
+  }
 
   /// Total you will get (sum of positive balances) & you will give (negative).
   Future<({double willGet, double willGive})> getPartyTotals(int businessId, {String? type}) async {
