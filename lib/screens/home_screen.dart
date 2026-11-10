@@ -12,6 +12,7 @@ import 'bill_book_screen.dart';
 import 'cash_book_screen.dart';
 import 'party_detail_screen.dart';
 import 'party_form_screen.dart';
+import 'reminders_screen.dart';
 import 'roznamcha_screen.dart';
 import 'staff_book_screen.dart';
 import 'stock_book_screen.dart';
@@ -60,6 +61,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   String _tab = 'customers'; // customers | suppliers | dealers | banks | all
   String _search = '';
+  String _filter = 'all'; // all | get | give (party list filter)
   bool _hideBalance = false;
   Future<_HomeData>? _future;
   int _seenTick = -1;
@@ -183,22 +185,6 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       ),
     );
-  }
-
-  void _remind(_PartyRow row, _HomeData data, {required bool request}) {
-    final p = context.read<AppProvider>();
-    final party = row.party;
-    if (party.phone.trim().isEmpty) {
-      showSnack(context, p.t('noPhone'));
-      return;
-    }
-    final msg = request
-        ? 'Dear ${party.name}, your outstanding balance at '
-            '${data.business.name} is ${formatRs(row.balance)}. '
-            'Please pay at the earliest. Thank you!'
-        : 'We will send your payment of ${formatRs(-row.balance)} soon. '
-            '- ${data.business.name}';
-    openWhatsApp(party.phone, msg);
   }
 
   Future<void> _addParty() async {
@@ -351,9 +337,22 @@ class _HomeScreenState extends State<HomeScreen> {
                 minimumSize: const Size(0, 32),
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
-              child: Text(
-                _hideBalance ? p.t('showBalance') : p.t('hideBalance'),
-                style: const TextStyle(color: AppColors.primary),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    _hideBalance
+                        ? Icons.visibility
+                        : Icons.visibility_off,
+                    size: 17,
+                    color: AppColors.primary,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    _hideBalance ? p.t('showBalance') : p.t('hideBalance'),
+                    style: const TextStyle(color: AppColors.primary),
+                  ),
+                ],
               ),
             ),
             if (_tab == 'banks')
@@ -437,32 +436,27 @@ class _HomeScreenState extends State<HomeScreen> {
           style: const TextStyle(fontWeight: FontWeight.w600)),
       subtitle:
           Text(row.lastDate == null ? '' : dateTimeFmt.format(row.lastDate!)),
-      trailing: balance == 0
-          ? const AmountText(0)
-          : Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                AmountText(balance, positiveIsGreen: false),
-                const SizedBox(height: 4),
-                OutlinedButton(
-                  onPressed: () =>
-                      _remind(row, data, request: balance > 0),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor:
-                        balance > 0 ? AppColors.red : AppColors.green,
-                    side: BorderSide(
-                        color: balance > 0 ? AppColors.red : AppColors.green),
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
-                    minimumSize: const Size(0, 27),
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    textStyle: const TextStyle(fontSize: 12),
-                  ),
-                  child: Text(p.t(balance > 0 ? 'request' : 'send')),
+      trailing: _hideBalance
+          ? const Text('••••••',
+              style: TextStyle(fontSize: 15, color: AppColors.textGrey))
+          : balance == 0
+              ? const AmountText(0)
+              : Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    AmountText(balance, positiveIsGreen: false),
+                    const SizedBox(height: 2),
+                    Text(
+                      balance > 0 ? p.t('youWillGet') : p.t('youWillGive'),
+                      style: TextStyle(
+                        fontSize: 11,
+                        color:
+                            balance > 0 ? AppColors.red : AppColors.green,
+                      ),
+                    ),
+                  ],
                 ),
-              ],
-            ),
       onTap: () => _openParty(row.party),
       onLongPress: () => _partyMenu(row.party),
     );
@@ -501,10 +495,19 @@ class _HomeScreenState extends State<HomeScreen> {
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
-                          IconButton(
-                            icon: const Icon(Icons.calendar_month,
-                                color: Colors.white),
-                            onPressed: () {},
+                          TextButton.icon(
+                            onPressed: () => Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                  builder: (_) => const RemindersScreen()),
+                            ),
+                            icon: const Icon(Icons.collections_bookmark,
+                                color: Colors.white, size: 18),
+                            label: Text(p.t('collection'),
+                                style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 12.5)),
                           ),
                         ],
                       ),
@@ -556,13 +559,13 @@ class _HomeScreenState extends State<HomeScreen> {
                           Navigator.push(
                               context,
                               MaterialPageRoute(
-                                  builder: (_) => BillBookScreen()));
+                                  builder: (_) => const BillBookScreen()));
                         }),
                         _moduleButton(Icons.groups, p.t('staffBook'), () {
                           Navigator.push(
                               context,
                               MaterialPageRoute(
-                                  builder: (_) => StaffBookScreen()));
+                                  builder: (_) => const StaffBookScreen()));
                         }),
                       ],
                     ),
@@ -580,10 +583,19 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                           ),
                         ),
-                        IconButton(
+                        PopupMenuButton<String>(
                           icon: const Icon(Icons.filter_list,
                               color: AppColors.primary),
-                          onPressed: () {},
+                          onSelected: (v) => setState(() => _filter = v),
+                          itemBuilder: (c) => [
+                            PopupMenuItem(
+                                value: 'all', child: Text(p.t('all'))),
+                            PopupMenuItem(
+                                value: 'get', child: Text(p.t('youWillGet'))),
+                            PopupMenuItem(
+                                value: 'give',
+                                child: Text(p.t('youWillGive'))),
+                          ],
                         ),
                         IconButton(
                           icon: const Icon(Icons.picture_as_pdf,
@@ -652,8 +664,11 @@ class _HomeScreenState extends State<HomeScreen> {
       );
     }
     final visible = data.parties
-        .where(
-            (r) => q.isEmpty || r.party.name.toLowerCase().contains(q))
+        .where((r) => q.isEmpty || r.party.name.toLowerCase().contains(q))
+        .where((r) =>
+            _filter == 'all' ||
+            (_filter == 'get' && r.balance > 0) ||
+            (_filter == 'give' && r.balance < 0))
         .toList();
     if (visible.isEmpty) return Center(child: Text(p.t('noData')));
     return ListView.separated(
