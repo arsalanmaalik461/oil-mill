@@ -75,20 +75,27 @@ class PartyTransaction {
   final String note;
   final DateTime dateTime;
   final String? attachmentPath;
+
+  /// How the money moved: 'cash' | 'bank' | 'jazzcash' | 'easypaisa'.
+  /// Only 'cash' entries touch the physical cash drawer (cash_entries).
+  final String method;
   PartyTransaction({
     this.id, required this.partyId, required this.type, required this.amount,
     this.note = '', required this.dateTime, this.attachmentPath,
+    this.method = 'cash',
   });
   Map<String, dynamic> toMap() => {
         if (id != null) 'id': id,
         'party_id': partyId, 'type': type, 'amount': amount, 'note': note,
         'date_time': dateTime.toIso8601String(), 'attachment_path': attachmentPath,
+        'method': method,
       };
   factory PartyTransaction.fromMap(Map<String, dynamic> m) => PartyTransaction(
         id: m['id'] as int?, partyId: m['party_id'], type: m['type'],
         amount: (m['amount'] ?? 0).toDouble(), note: m['note'] ?? '',
         dateTime: DateTime.tryParse(m['date_time'] ?? '') ?? DateTime.now(),
         attachmentPath: m['attachment_path'],
+        method: m['method'] ?? 'cash',
       );
 }
 
@@ -102,19 +109,29 @@ class CashEntry {
   final int? partyId;
   final DateTime dateTime;
   final String? attachmentPath;
+
+  /// Where this cash movement came from (e.g. 'party_transactions',
+  /// 'expenses', 'salary_payments', 'bills', 'qr_payments'). Null for a
+  /// manual Cash Book entry. (sourceTable, sourceId) is UNIQUE in the
+  /// database, so an automatic posting can never be duplicated.
+  final String? sourceTable;
+  final int? sourceId;
   CashEntry({
     this.id, required this.businessId, required this.type, required this.amount,
     this.note = '', this.partyId, required this.dateTime, this.attachmentPath,
+    this.sourceTable, this.sourceId,
   });
   Map<String, dynamic> toMap() => {
         if (id != null) 'id': id,
         'business_id': businessId, 'type': type, 'amount': amount, 'note': note,
         'party_id': partyId, 'date_time': dateTime.toIso8601String(),
         'attachment_path': attachmentPath,
+        'source_table': sourceTable, 'source_id': sourceId,
       };
   factory CashEntry.fromMap(Map<String, dynamic> m) => CashEntry(
         id: m['id'] as int?, businessId: m['business_id'] ?? 1, type: m['type'],
         amount: (m['amount'] ?? 0).toDouble(), note: m['note'] ?? '',
+        sourceTable: m['source_table'], sourceId: m['source_id'],
         partyId: m['party_id'], dateTime: DateTime.tryParse(m['date_time'] ?? '') ?? DateTime.now(),
         attachmentPath: m['attachment_path'],
       );

@@ -18,7 +18,7 @@ class DatabaseHelper {
     final dir = await getDatabasesPath();
     return openDatabase(
       p.join(dir, 'namat_oil_mill.db'),
-      version: 6,
+      version: 7,
       onUpgrade: (d, oldVersion, newVersion) async {
         if (oldVersion < 2) {
           // v2: track when a payment reminder was last sent to each party.
@@ -54,6 +54,21 @@ class DatabaseHelper {
           await d.execute(
               "ALTER TABLE businesses ADD COLUMN app_username TEXT DEFAULT ''");
         }
+        if (oldVersion < 7) {
+          // v7 (Phase 1 — cash accounting): payment method on ledger
+          // entries, and source linkage on cash entries so every
+          // automatic cash posting is traceable and can never duplicate
+          // (UNIQUE index on (source_table, source_id)).
+          await d.execute(
+              "ALTER TABLE party_transactions ADD COLUMN method TEXT DEFAULT 'cash'");
+          await d.execute(
+              'ALTER TABLE cash_entries ADD COLUMN source_table TEXT');
+          await d.execute(
+              'ALTER TABLE cash_entries ADD COLUMN source_id INTEGER');
+          await d.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_cash_source '
+              'ON cash_entries(source_table, source_id) '
+              'WHERE source_id IS NOT NULL');
+        }
         if (oldVersion < 6) {
           // v6: optional payment due date on a party (the original app's
           // "Set Date" on the party screen).
@@ -69,10 +84,14 @@ class DatabaseHelper {
           last_reminder_at TEXT, created_at TEXT, due_date TEXT)''');
         await d.execute('''CREATE TABLE party_transactions(
           id INTEGER PRIMARY KEY AUTOINCREMENT, party_id INTEGER, type TEXT, amount REAL,
-          note TEXT, date_time TEXT, attachment_path TEXT)''');
+          note TEXT, date_time TEXT, attachment_path TEXT, method TEXT DEFAULT 'cash')''');
         await d.execute('''CREATE TABLE cash_entries(
           id INTEGER PRIMARY KEY AUTOINCREMENT, business_id INTEGER, type TEXT, amount REAL,
-          note TEXT, party_id INTEGER, date_time TEXT, attachment_path TEXT)''');
+          note TEXT, party_id INTEGER, date_time TEXT, attachment_path TEXT,
+          source_table TEXT, source_id INTEGER)''');
+        await d.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_cash_source '
+            'ON cash_entries(source_table, source_id) '
+            'WHERE source_id IS NOT NULL');
         await d.execute('''CREATE TABLE items(
           id INTEGER PRIMARY KEY AUTOINCREMENT, business_id INTEGER, name TEXT, unit TEXT,
           opening_qty REAL DEFAULT 0, low_stock_limit REAL DEFAULT 0, deleted INTEGER DEFAULT 0,
@@ -207,11 +226,119 @@ class DatabaseHelper {
   Future<int> insertPartyTransaction(PartyTransaction t) async =>
       (await db).insert('party_transactions', t.toMap());
 
-  Future<void> deletePartyTransaction(int id) async =>
-      (await db).delete('party_transactions', where: 'id = ?', whereArgs: [id]);
+  // ---------------- Linked cash postings (Phase 1) ----------------
+  // Automatic cash movements are written as cash_entries rows carrying
+  // (source_table, source_id); the UNIQUE index on that pair makes a
+  // duplicate posting impossible at the database level.
 
-  Future<void> updatePartyTransaction(PartyTransaction t) async => (await db)
-      .update('party_transactions', t.toMap(), where: 'id = ?', whereArgs: [t.id]);
+  Future<int?> _businessIdOfParty(Transaction txn, int partyId) async {
+    final rows = await txn.query('parties',
+        columns: ['business_id'], where: 'id = ?', whereArgs: [partyId]);
+    if (rows.isEmpty) return null;
+    return (rows.first['business_id'] as num?)?.toInt();
+  }
+
+  Future<int?> _businessIdOfStaff(Transaction txn, int staffId) async {
+    final rows = await txn.query('staff',
+        columns: ['business_id'], where: 'id = ?', whereArgs: [staffId]);
+    if (rows.isEmpty) return null;
+    return (rows.first['business_id'] as num?)?.toInt();
+  }
+
+  /// Inserts the cash-drawer twin of an automatic posting inside [txn].
+  Future<void> _postLinkedCash(
+    Transaction txn, {
+    required int businessId,
+    required String type,
+    required double amount,
+    required String note,
+    int? partyId,
+    required DateTime dateTime,
+    String? attachmentPath,
+    required String sourceTable,
+    required int sourceId,
+  }) async {
+    await txn.insert('cash_entries', {
+      'business_id': businessId,
+      'type': type,
+      'amount': amount,
+      'note': note,
+      'party_id': partyId,
+      'date_time': dateTime.toIso8601String(),
+      'attachment_path': attachmentPath,
+      'source_table': sourceTable,
+      'source_id': sourceId,
+    });
+  }
+
+  Future<void> _deleteLinkedCash(
+      Transaction txn, String sourceTable, int sourceId) async {
+    await txn.delete('cash_entries',
+        where: 'source_table = ? AND source_id = ?',
+        whereArgs: [sourceTable, sourceId]);
+  }
+
+  /// Saves a MANUAL ledger entry from the party entry form. When the
+  /// payment method is cash, the matching drawer movement is posted in
+  /// the same transaction (wasool -> cash in, udhaar -> cash out);
+  /// bank / JazzCash / Easypaisa entries never touch physical cash.
+  /// Internal flows (bills, purchases, QR) keep using the raw
+  /// [insertPartyTransaction] and manage their own cash explicitly.
+  Future<int> insertLedgerEntry(PartyTransaction t) async {
+    final d = await db;
+    return d.transaction((txn) async {
+      final id = await txn.insert('party_transactions', t.toMap());
+      if (t.method == 'cash') {
+        final biz = await _businessIdOfParty(txn, t.partyId);
+        if (biz != null) {
+          await _postLinkedCash(txn,
+              businessId: biz,
+              type: t.type == 'wasool' ? 'in' : 'out',
+              amount: t.amount,
+              note: t.note,
+              partyId: t.partyId,
+              dateTime: t.dateTime,
+              attachmentPath: t.attachmentPath,
+              sourceTable: 'party_transactions',
+              sourceId: id);
+        }
+      }
+      return id;
+    });
+  }
+
+  Future<void> deletePartyTransaction(int id) async {
+    final d = await db;
+    await d.transaction((txn) async {
+      await _deleteLinkedCash(txn, 'party_transactions', id);
+      await txn.delete('party_transactions', where: 'id = ?', whereArgs: [id]);
+    });
+  }
+
+  Future<void> updatePartyTransaction(PartyTransaction t) async {
+    final d = await db;
+    await d.transaction((txn) async {
+      await txn.update('party_transactions', t.toMap(),
+          where: 'id = ?', whereArgs: [t.id]);
+      // Re-sync the linked drawer movement with the edited values.
+      await _deleteLinkedCash(txn, 'party_transactions', t.id!);
+      if (t.method == 'cash') {
+        final biz = await _businessIdOfParty(txn, t.partyId);
+        if (biz != null) {
+          await _postLinkedCash(txn,
+              businessId: biz,
+              type: t.type == 'wasool' ? 'in' : 'out',
+              amount: t.amount,
+              note: t.note,
+              partyId: t.partyId,
+              dateTime: t.dateTime,
+              attachmentPath: t.attachmentPath,
+              sourceTable: 'party_transactions',
+              sourceId: t.id!);
+        }
+      }
+    });
+  }
 
   /// Latest ledger activity per party (partyId -> newest entry time) for
   /// one business; parties with no entries are absent from the map.
@@ -488,8 +615,28 @@ class DatabaseHelper {
     return rows.map(Attendance.fromMap).toList();
   }
 
-  Future<int> insertSalaryPayment(SalaryPayment p) async =>
-      (await db).insert('salary_payments', p.toMap());
+  /// Inserts a salary/advance payment and posts the matching cash
+  /// outflow in the same transaction — salary money always leaves the
+  /// drawer, and the Staff Book was previously invisible to the cash
+  /// book (audit Phase 1).
+  Future<int> insertSalaryPayment(SalaryPayment p) async {
+    final d = await db;
+    return d.transaction((txn) async {
+      final id = await txn.insert('salary_payments', p.toMap());
+      final biz = await _businessIdOfStaff(txn, p.staffId);
+      if (biz != null) {
+        await _postLinkedCash(txn,
+            businessId: biz,
+            type: 'out',
+            amount: p.amount,
+            note: p.note.isNotEmpty ? p.note : 'Salary',
+            dateTime: p.dateTime,
+            sourceTable: 'salary_payments',
+            sourceId: id);
+      }
+      return id;
+    });
+  }
 
   Future<List<SalaryPayment>> getSalaryPayments(int staffId) async {
     final d = await db;
@@ -564,10 +711,51 @@ class DatabaseHelper {
     return rows.map(Expense.fromMap).toList();
   }
 
-  Future<int> insertExpense(Expense e) async => (await db).insert('expenses', e.toMap());
+  /// Inserts an expense; a CASH expense also posts its drawer outflow
+  /// in the same transaction (bank expenses never touch the drawer).
+  Future<int> insertExpense(Expense e) async {
+    final d = await db;
+    return d.transaction((txn) async {
+      final id = await txn.insert('expenses', e.toMap());
+      if (e.account == 'cash') {
+        await _postLinkedCash(txn,
+            businessId: e.businessId,
+            type: 'out',
+            amount: e.amount,
+            note: e.note.isNotEmpty ? e.note : e.category,
+            dateTime: e.dateTime,
+            sourceTable: 'expenses',
+            sourceId: id);
+      }
+      return id;
+    });
+  }
 
-  Future<void> deleteExpense(int id) async =>
-      (await db).delete('expenses', where: 'id = ?', whereArgs: [id]);
+  Future<void> updateExpense(Expense e) async {
+    final d = await db;
+    await d.transaction((txn) async {
+      await txn.update('expenses', e.toMap(), where: 'id = ?', whereArgs: [e.id]);
+      await _deleteLinkedCash(txn, 'expenses', e.id!);
+      if (e.account == 'cash') {
+        await _postLinkedCash(txn,
+            businessId: e.businessId,
+            type: 'out',
+            amount: e.amount,
+            note: e.note.isNotEmpty ? e.note : e.category,
+            dateTime: e.dateTime,
+            sourceTable: 'expenses',
+            sourceId: e.id!);
+      }
+    });
+  }
+
+  Future<void> deleteExpense(int id) async {
+    final d = await db;
+    await d.transaction((txn) async {
+      await _deleteLinkedCash(txn, 'expenses', id);
+      await txn.delete('expenses', where: 'id = ?', whereArgs: [id]);
+    });
+  }
 
   Future<double> getExpenseTotal(int businessId, {DateTime? month}) async {
     final d = await db;
