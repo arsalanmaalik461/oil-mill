@@ -162,10 +162,18 @@ class _RoznamchaScreenState extends State<RoznamchaScreen> {
       final amt = (r['amount'] as num?)?.toDouble() ?? 0;
       final partyName = r['party_name'] as String? ?? 'Party';
       final note = r['note'] as String? ?? '';
+      final method = r['method'] as String? ?? 'cash';
+      final methodLabel = method == 'cash'
+          ? 'نقد (Cash)'
+          : method == 'bank'
+              ? 'بینک (Bank)'
+              : method == 'jazzcash'
+                  ? 'JazzCash'
+                  : 'Easypaisa';
       entries.add(_RoznamchaEntry(
         dateTime: dt,
         title: partyName,
-        subtitle: '${isWasool ? 'وصولی (Got)' : 'ادائیگی (Gave)'}${note.isNotEmpty ? ' • $note' : ''}',
+        subtitle: '${isWasool ? 'وصولی (Got)' : 'ادائیگی (Gave)'} • $methodLabel${note.isNotEmpty ? ' • $note' : ''}',
         amount: amt,
         isInflow: isWasool,
         category: _RoznamchaFilter.parties,
@@ -176,7 +184,8 @@ class _RoznamchaScreenState extends State<RoznamchaScreen> {
     // 5. Bills on this day
     final billRows = await rawDb.query(
       'bills',
-      where: 'business_id = ? AND date_time >= ? AND date_time <= ?',
+      where:
+          'business_id = ? AND deleted = 0 AND date_time >= ? AND date_time <= ?',
       whereArgs: [bizId, startIso, endIso],
       orderBy: 'date_time ASC, id ASC',
     );
@@ -185,7 +194,8 @@ class _RoznamchaScreenState extends State<RoznamchaScreen> {
       entries.add(_RoznamchaEntry(
         dateTime: b.dateTime,
         title: 'Bill #${b.billNo}',
-        subtitle: b.partyName.isNotEmpty ? b.partyName : 'Counter Sale',
+        subtitle:
+            '${b.partyName.isNotEmpty ? b.partyName : 'Counter Sale'} • ${b.status == 'paid' ? 'نقد ادائیگی (Paid)' : 'ادھار (Credit)'}',
         amount: b.total,
         isInflow: true,
         category: _RoznamchaFilter.bills,
@@ -205,7 +215,8 @@ class _RoznamchaScreenState extends State<RoznamchaScreen> {
       entries.add(_RoznamchaEntry(
         dateTime: exp.dateTime,
         title: 'خرچہ: ${exp.category}',
-        subtitle: exp.note.isNotEmpty ? exp.note : 'روزانہ اخراجات',
+        subtitle:
+            '${exp.note.isNotEmpty ? exp.note : 'روزانہ اخراجات'} • ${exp.account == 'bank' ? 'بینک (Bank)' : 'نقد (Cash)'}',
         amount: exp.amount,
         isInflow: false,
         category: _RoznamchaFilter.expenses,
@@ -222,7 +233,7 @@ class _RoznamchaScreenState extends State<RoznamchaScreen> {
       where: 'business_id = ? AND date_time >= ? AND date_time <= ?',
       whereArgs: [bizId, startIso, endIso],
     );
-    int batchCount = batchRows.length;
+    int batchCount = 0;
     double totalInputKg = 0;
     double totalOilKg = 0;
     double totalKhalKg = 0;
@@ -230,6 +241,8 @@ class _RoznamchaScreenState extends State<RoznamchaScreen> {
 
     for (final r in batchRows) {
       final b = ProductionBatch.fromMap(r);
+      if (b.status == 'cancelled') continue;
+      batchCount++;
       if (b.id != null) {
         final inRows = await rawDb.rawQuery('''
           SELECT pi.qty, i.name, i.unit
