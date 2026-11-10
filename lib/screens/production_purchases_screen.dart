@@ -130,26 +130,15 @@ class _ProductionPurchasesScreenState
       showSnack(context, p.t('insufficientStock'));
       return;
     }
-    await db.insertStockTransaction(StockTransaction(
+    // One atomic transaction in the database layer (Phase 3):
+    // stock-out + the supplier adjustment that reduces what we owe.
+    await db.savePurchaseReturn(
       itemId: row.item.id!,
-      type: 'out',
       qty: qty,
       rate: row.txn.rate,
       supplierId: row.txn.supplierId,
-      note: 'Purchase return',
       dateTime: DateTime.now(),
-    ));
-    if (row.txn.supplierId != null) {
-      // Returning goods to the supplier reduces what we owe them:
-      // 'udhaar' moves the supplier balance back towards zero.
-      await db.insertPartyTransaction(PartyTransaction(
-        partyId: row.txn.supplierId!,
-        type: 'udhaar',
-        amount: qty * row.txn.rate,
-        note: 'Purchase return',
-        dateTime: DateTime.now(),
-      ));
-    }
+    );
     if (!mounted) return;
     context.read<AppProvider>().bump();
     showSnack(context, p.t('savedSuccessfully'));
@@ -388,47 +377,17 @@ class _PurchaseFormScreenState extends State<_PurchaseFormScreen> {
     final bizId = p.businessId;
     final supplierId = _supplier?.id;
 
-    await db.insertStockTransaction(StockTransaction(
+    // One atomic transaction in the database layer (Phase 3):
+    // stock-in + supplier wasool (+ udhaar and cash-out when paid).
+    await db.saveRawPurchase(
+      businessId: bizId,
       itemId: _item!.id!,
-      type: 'in',
       qty: qty,
       rate: rate,
       supplierId: supplierId,
-      note: 'Purchase',
+      paid: _status == 'paid',
       dateTime: _date,
-    ));
-    if (supplierId != null) {
-      // Buying on account: 'wasool' records the purchase against the
-      // supplier (their balance goes negative = we will give / we owe).
-      await db.insertPartyTransaction(PartyTransaction(
-        partyId: supplierId,
-        type: 'wasool',
-        amount: total,
-        note: 'Purchase',
-        dateTime: _date,
-      ));
-      if (_status == 'paid') {
-        // Paid on the spot: an 'udhaar' payment entry zeroes the ledger
-        // again, keeping the complete purchase + payment history.
-        await db.insertPartyTransaction(PartyTransaction(
-          partyId: supplierId,
-          type: 'udhaar',
-          amount: total,
-          note: 'Purchase payment',
-          dateTime: _date,
-        ));
-      }
-    }
-    if (_status == 'paid') {
-      await db.insertCashEntry(CashEntry(
-        businessId: bizId,
-        type: 'out',
-        amount: total,
-        note: 'Purchase payment',
-        partyId: supplierId,
-        dateTime: _date,
-      ));
-    }
+    );
     if (!mounted) return;
     p.bump();
     showSnack(context, p.t('savedSuccessfully'));

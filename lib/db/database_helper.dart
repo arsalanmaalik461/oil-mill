@@ -18,7 +18,7 @@ class DatabaseHelper {
     final dir = await getDatabasesPath();
     return openDatabase(
       p.join(dir, 'namat_oil_mill.db'),
-      version: 8,
+      version: 9,
       onUpgrade: (d, oldVersion, newVersion) async {
         if (oldVersion < 2) {
           // v2: track when a payment reminder was last sent to each party.
@@ -53,6 +53,14 @@ class DatabaseHelper {
           // app login username (Firebase app_users record).
           await d.execute(
               "ALTER TABLE businesses ADD COLUMN app_username TEXT DEFAULT ''");
+        }
+        if (oldVersion < 9) {
+          // v9 (Phase 3 — transaction integrity): every bill posting
+          // carries its bill_id so a bill can be reversed exactly.
+          await d.execute(
+              'ALTER TABLE stock_transactions ADD COLUMN bill_id INTEGER');
+          await d.execute(
+              'ALTER TABLE party_transactions ADD COLUMN bill_id INTEGER');
         }
         if (oldVersion < 8) {
           // v8 (Phase 2 — inventory & COGS): sale-time cost snapshot on
@@ -94,7 +102,7 @@ class DatabaseHelper {
           last_reminder_at TEXT, created_at TEXT, due_date TEXT)''');
         await d.execute('''CREATE TABLE party_transactions(
           id INTEGER PRIMARY KEY AUTOINCREMENT, party_id INTEGER, type TEXT, amount REAL,
-          note TEXT, date_time TEXT, attachment_path TEXT, method TEXT DEFAULT 'cash')''');
+          note TEXT, date_time TEXT, attachment_path TEXT, method TEXT DEFAULT 'cash', bill_id INTEGER)''');
         await d.execute('''CREATE TABLE cash_entries(
           id INTEGER PRIMARY KEY AUTOINCREMENT, business_id INTEGER, type TEXT, amount REAL,
           note TEXT, party_id INTEGER, date_time TEXT, attachment_path TEXT,
@@ -108,7 +116,7 @@ class DatabaseHelper {
           category TEXT, kind TEXT, density REAL)''');
         await d.execute('''CREATE TABLE stock_transactions(
           id INTEGER PRIMARY KEY AUTOINCREMENT, item_id INTEGER, type TEXT, qty REAL, rate REAL,
-          supplier_id INTEGER, bill_no TEXT, note TEXT, date_time TEXT, attachment_path TEXT)''');
+          supplier_id INTEGER, bill_no TEXT, note TEXT, date_time TEXT, attachment_path TEXT, bill_id INTEGER)''');
         await d.execute('''CREATE TABLE bills(
           id INTEGER PRIMARY KEY AUTOINCREMENT, business_id INTEGER, bill_no INTEGER, party_id INTEGER,
           party_name TEXT, total REAL, status TEXT, date_time TEXT, deleted INTEGER DEFAULT 0)''');
@@ -420,6 +428,9 @@ class DatabaseHelper {
 
   Future<int> insertCashEntry(CashEntry e) async => (await db).insert('cash_entries', e.toMap());
 
+  Future<void> updateCashEntry(CashEntry e) async => (await db)
+      .update('cash_entries', e.toMap(), where: 'id = ?', whereArgs: [e.id]);
+
   Future<void> deleteCashEntry(int id) async =>
       (await db).delete('cash_entries', where: 'id = ?', whereArgs: [id]);
 
@@ -513,53 +524,158 @@ class DatabaseHelper {
     // cost of THIS moment, before the sale is posted. Reports read the
     // snapshot, so a later purchase can never rewrite a past period's
     // profit. Free-text lines keep a null cost (unknown, flagged).
+    final enriched = <BillItem>[];
     final costOf = <int, double>{};
     for (final it in items) {
-      if (it.itemId != null && !costOf.containsKey(it.itemId)) {
-        costOf[it.itemId!] = await getItemUnitCost(it.itemId!);
+      double? unitCost = it.costRate;
+      if (unitCost == null && it.itemId != null) {
+        unitCost = costOf[it.itemId!] ??=
+            await getItemUnitCost(it.itemId!);
       }
+      enriched.add(BillItem(
+        billId: it.billId,
+        itemId: it.itemId,
+        name: it.name,
+        qty: it.qty,
+        rate: it.rate,
+        costRate: unitCost,
+        costAmount: unitCost == null ? null : unitCost * it.qty,
+      ));
     }
     return d.transaction((txn) async {
       final billId = await txn.insert('bills', bill.toMap());
-      for (final it in items) {
-        final unitCost = it.itemId == null ? null : costOf[it.itemId!];
-        await txn.insert('bill_items', {
-          ...it.toMap(),
-          'bill_id': billId,
-          'cost_rate': unitCost,
-          'cost_amount': unitCost == null ? null : unitCost * it.qty,
-        });
-        if (it.itemId != null) {
-          await txn.insert('stock_transactions', {
-            'item_id': it.itemId, 'type': 'out', 'qty': it.qty, 'rate': it.rate,
-            'supplier_id': null, 'bill_no': bill.billNo.toString(),
-            'note': 'Bill #${bill.billNo}', 'date_time': bill.dateTime.toIso8601String(),
-            'attachment_path': null,
-          });
-        }
-      }
-      if (bill.partyId != null) {
-        await txn.insert('party_transactions', {
-          'party_id': bill.partyId, 'type': 'udhaar', 'amount': bill.total,
-          'note': 'Bill #${bill.billNo}', 'date_time': bill.dateTime.toIso8601String(),
-          'attachment_path': null,
-        });
-        if (bill.status == 'paid') {
-          await txn.insert('party_transactions', {
-            'party_id': bill.partyId, 'type': 'wasool', 'amount': bill.total,
-            'note': 'Bill #${bill.billNo} payment', 'date_time': bill.dateTime.toIso8601String(),
-            'attachment_path': null,
-          });
-        }
-      }
-      if (bill.status == 'paid') {
-        await txn.insert('cash_entries', {
-          'business_id': businessId, 'type': 'in', 'amount': bill.total,
-          'note': 'Bill #${bill.billNo}', 'party_id': bill.partyId,
-          'date_time': bill.dateTime.toIso8601String(), 'attachment_path': null,
-        });
-      }
+      final posted = Bill(
+        id: billId,
+        businessId: bill.businessId,
+        billNo: bill.billNo,
+        partyId: bill.partyId,
+        partyName: bill.partyName,
+        total: bill.total,
+        status: bill.status,
+        dateTime: bill.dateTime,
+        deleted: bill.deleted,
+      );
+      await _postBillEntries(txn, businessId, posted, enriched);
       return billId;
+    });
+  }
+
+  /// Inserts a bill's items and ALL of its accounting postings (stock
+  /// out, ledger udhaar/wasool, cash in) inside [txn]. Every posting
+  /// carries the bill_id (Phase 3) so it can be reversed exactly.
+  /// Items must already carry their COGS snapshot (costRate).
+  Future<void> _postBillEntries(Transaction txn, int businessId, Bill bill,
+      List<BillItem> items) async {
+    for (final it in items) {
+      await txn.insert('bill_items', {
+        ...it.toMap(),
+        'bill_id': bill.id,
+        'cost_amount':
+            it.costRate == null ? null : it.costRate! * it.qty,
+      });
+      if (it.itemId != null) {
+        await txn.insert('stock_transactions', {
+          'item_id': it.itemId, 'type': 'out', 'qty': it.qty, 'rate': it.rate,
+          'supplier_id': null, 'bill_no': bill.billNo.toString(),
+          'note': 'Bill #${bill.billNo}',
+          'date_time': bill.dateTime.toIso8601String(),
+          'attachment_path': null,
+          'bill_id': bill.id,
+        });
+      }
+    }
+    if (bill.partyId != null) {
+      await txn.insert('party_transactions', {
+        'party_id': bill.partyId, 'type': 'udhaar', 'amount': bill.total,
+        'note': 'Bill #${bill.billNo}',
+        'date_time': bill.dateTime.toIso8601String(),
+        'attachment_path': null, 'method': 'cash', 'bill_id': bill.id,
+      });
+      if (bill.status == 'paid') {
+        await txn.insert('party_transactions', {
+          'party_id': bill.partyId, 'type': 'wasool', 'amount': bill.total,
+          'note': 'Bill #${bill.billNo} payment',
+          'date_time': bill.dateTime.toIso8601String(),
+          'attachment_path': null, 'method': 'cash', 'bill_id': bill.id,
+        });
+      }
+    }
+    if (bill.status == 'paid') {
+      await txn.insert('cash_entries', {
+        'business_id': businessId, 'type': 'in', 'amount': bill.total,
+        'note': 'Bill #${bill.billNo}', 'party_id': bill.partyId,
+        'date_time': bill.dateTime.toIso8601String(), 'attachment_path': null,
+        'source_table': 'bills', 'source_id': bill.id,
+      });
+    }
+  }
+
+  /// Removes ALL of a bill's postings inside [txn]: the exact rows by
+  /// bill_id / cash source, plus a best-effort legacy sweep for bills
+  /// created before bill_id existed (matched by bill number + note,
+  /// which are unique per business). After this runs, the bill has
+  /// zero effect on stock, ledgers and cash.
+  Future<void> _reverseBillPostings(Transaction txn, Bill bill) async {
+    final no = bill.billNo.toString();
+    await txn.delete('stock_transactions',
+        where: 'bill_id = ?', whereArgs: [bill.id]);
+    await txn.delete('stock_transactions',
+        where: 'bill_id IS NULL AND bill_no = ?', whereArgs: [no]);
+    await txn.delete('party_transactions',
+        where: 'bill_id = ?', whereArgs: [bill.id]);
+    if (bill.partyId != null) {
+      await txn.delete('party_transactions',
+          where: 'bill_id IS NULL AND party_id = ? AND note IN (?, ?)',
+          whereArgs: [bill.partyId, 'Bill #$no', 'Bill #$no payment']);
+    }
+    await txn.delete('cash_entries',
+        where: 'source_table = ? AND source_id = ?',
+        whereArgs: ['bills', bill.id]);
+    await txn.delete('cash_entries',
+        where: 'source_id IS NULL AND business_id = ? AND note = ?',
+        whereArgs: [bill.businessId, 'Bill #$no']);
+  }
+
+  Future<Bill?> _billById(DatabaseExecutor e, int id) async {
+    final rows = await e.query('bills', where: 'id = ?', whereArgs: [id]);
+    return rows.isEmpty ? null : Bill.fromMap(rows.first);
+  }
+
+  /// Edits a bill atomically: reverses the old postings, updates the
+  /// bill row, and re-posts from the edited items — same transaction,
+  /// same bill number. Lines that already carry a COGS snapshot keep
+  /// their original sale-time cost; only brand-new lines are priced at
+  /// today's unit cost.
+  Future<void> updateBill({
+    required Bill bill,
+    required List<BillItem> items,
+  }) async {
+    final d = await db;
+    final enriched = <BillItem>[];
+    final costOf = <int, double>{};
+    for (final it in items) {
+      double? unitCost = it.costRate;
+      if (unitCost == null && it.itemId != null) {
+        unitCost = costOf[it.itemId!] ??=
+            await getItemUnitCost(it.itemId!);
+      }
+      enriched.add(BillItem(
+        billId: bill.id!,
+        itemId: it.itemId,
+        name: it.name,
+        qty: it.qty,
+        rate: it.rate,
+        costRate: unitCost,
+        costAmount: unitCost == null ? null : unitCost * it.qty,
+      ));
+    }
+    await d.transaction((txn) async {
+      final old = await _billById(txn, bill.id!);
+      if (old == null) return;
+      await _reverseBillPostings(txn, old);
+      await txn.delete('bill_items', where: 'bill_id = ?', whereArgs: [bill.id]);
+      await txn.update('bills', bill.toMap(), where: 'id = ?', whereArgs: [bill.id]);
+      await _postBillEntries(txn, bill.businessId, bill, enriched);
     });
   }
 
@@ -569,13 +685,84 @@ class DatabaseHelper {
     return rows.map(BillItem.fromMap).toList();
   }
 
-  Future<void> setBillDeleted(int id, bool deleted) async => (await db).update(
-        'bills', {'deleted': deleted ? 1 : 0}, where: 'id = ?', whereArgs: [id]);
+  /// Soft-delete / restore WITH full accounting effect (Phase 3):
+  /// deleting a bill reverses its stock, ledger and cash postings in
+  /// the same transaction; restoring re-posts them from the stored
+  /// bill and items (original COGS snapshots preserved). Before this,
+  /// a deleted bill kept haunting stock, balances and cash forever.
+  Future<void> setBillDeleted(int id, bool deleted) async {
+    final d = await db;
+    await d.transaction((txn) async {
+      final bill = await _billById(txn, id);
+      if (bill == null) return;
+      if (deleted) {
+        await _reverseBillPostings(txn, bill);
+        await txn.update('bills', {'deleted': 1},
+            where: 'id = ?', whereArgs: [id]);
+      } else {
+        await txn.update('bills', {'deleted': 0},
+            where: 'id = ?', whereArgs: [id]);
+        final rows = await txn.query('bill_items',
+            where: 'bill_id = ?', whereArgs: [id]);
+        final items = rows.map(BillItem.fromMap).toList();
+        await txn.delete('bill_items', where: 'bill_id = ?', whereArgs: [id]);
+        await _postBillEntries(txn, bill.businessId, bill, items);
+      }
+    });
+  }
 
   Future<void> deleteBillForever(int id) async {
     final d = await db;
-    await d.delete('bill_items', where: 'bill_id = ?', whereArgs: [id]);
-    await d.delete('bills', where: 'id = ?', whereArgs: [id]);
+    await d.transaction((txn) async {
+      final bill = await _billById(txn, id);
+      if (bill != null) await _reverseBillPostings(txn, bill);
+      await txn.delete('bill_items', where: 'bill_id = ?', whereArgs: [id]);
+      await txn.delete('bills', where: 'id = ?', whereArgs: [id]);
+    });
+  }
+
+  /// Book check (Phase 3): how many soft-deleted bills still have
+  /// surviving postings (only possible for bills deleted before the
+  /// reversal engine existed). Zero is healthy.
+  Future<int> countDeletedBillsWithPostings(int businessId) async {
+    final d = await db;
+    final bills = await d.query('bills',
+        where: 'business_id = ? AND deleted = 1', whereArgs: [businessId]);
+    var count = 0;
+    for (final r in bills) {
+      final b = Bill.fromMap(r);
+      final no = b.billNo.toString();
+      final checks = await Future.wait([
+        d.rawQuery('SELECT COUNT(*) AS c FROM stock_transactions '
+            'WHERE bill_id = ? OR (bill_id IS NULL AND bill_no = ?)',
+            [b.id, no]),
+        d.rawQuery('SELECT COUNT(*) AS c FROM party_transactions '
+            'WHERE bill_id = ?', [b.id]),
+        d.rawQuery('SELECT COUNT(*) AS c FROM cash_entries '
+            'WHERE (source_table = ? AND source_id = ?) OR '
+            '(source_id IS NULL AND business_id = ? AND note = ?)',
+            ['bills', b.id, businessId, 'Bill #$no']),
+      ]);
+      if (checks.any((c) => (c.first['c'] as num) > 0)) count++;
+    }
+    return count;
+  }
+
+  /// Reverses the surviving postings of every soft-deleted bill of
+  /// the business (repairs books written before Phase 3).
+  Future<int> repairDeletedBills(int businessId) async {
+    final d = await db;
+    final bills = await d.query('bills',
+        where: 'business_id = ? AND deleted = 1', whereArgs: [businessId]);
+    var repaired = 0;
+    for (final r in bills) {
+      final b = Bill.fromMap(r);
+      await d.transaction((txn) async {
+        await _reverseBillPostings(txn, b);
+      });
+      repaired++;
+    }
+    return repaired;
   }
 
   Future<double> getTotalSales(int businessId, {DateTime? month}) async {
@@ -896,6 +1083,96 @@ class DatabaseHelper {
 
   Future<void> deleteQrPayment(int id) async =>
       (await db).delete('qr_payments', where: 'id = ?', whereArgs: [id]);
+
+  // ---------------- Raw material purchases (atomic) ----------------
+  /// Saves a raw-material purchase in ONE transaction: stock-in, the
+  /// supplier's wasool (we owe), the udhaar payment when paid on the
+  /// spot, and the cash-out — previously four separate writes that a
+  /// crash could leave half-posted (Phase 3). Returns the stock
+  /// transaction id.
+  Future<int> saveRawPurchase({
+    required int businessId,
+    required int itemId,
+    required double qty,
+    required double rate,
+    int? supplierId,
+    required bool paid,
+    required DateTime dateTime,
+  }) async {
+    final d = await db;
+    final total = qty * rate;
+    return d.transaction((txn) async {
+      final stockId = await txn.insert('stock_transactions', {
+        'item_id': itemId, 'type': 'in', 'qty': qty, 'rate': rate,
+        'supplier_id': supplierId, 'bill_no': '', 'note': 'Purchase',
+        'date_time': dateTime.toIso8601String(), 'attachment_path': null,
+      });
+      if (supplierId != null) {
+        await txn.insert(
+            'party_transactions',
+            PartyTransaction(
+              partyId: supplierId,
+              type: 'wasool',
+              amount: total,
+              note: 'Purchase',
+              dateTime: dateTime,
+            ).toMap());
+        if (paid) {
+          await txn.insert(
+              'party_transactions',
+              PartyTransaction(
+                partyId: supplierId,
+                type: 'udhaar',
+                amount: total,
+                note: 'Purchase payment',
+                dateTime: dateTime,
+              ).toMap());
+        }
+      }
+      if (paid) {
+        await _postLinkedCash(txn,
+            businessId: businessId,
+            type: 'out',
+            amount: total,
+            note: 'Purchase payment',
+            partyId: supplierId,
+            dateTime: dateTime,
+            sourceTable: 'purchases',
+            sourceId: stockId);
+      }
+      return stockId;
+    });
+  }
+
+  /// Saves a purchase return in ONE transaction: stock-out plus the
+  /// supplier ledger adjustment that reduces what we owe them.
+  Future<void> savePurchaseReturn({
+    required int itemId,
+    required double qty,
+    required double rate,
+    int? supplierId,
+    required DateTime dateTime,
+  }) async {
+    final d = await db;
+    await d.transaction((txn) async {
+      await txn.insert('stock_transactions', {
+        'item_id': itemId, 'type': 'out', 'qty': qty, 'rate': rate,
+        'supplier_id': supplierId, 'bill_no': '', 'note': 'Purchase return',
+        'date_time': dateTime.toIso8601String(), 'attachment_path': null,
+      });
+      if (supplierId != null) {
+        await txn.insert(
+            'party_transactions',
+            PartyTransaction(
+              partyId: supplierId,
+              type: 'udhaar',
+              amount: qty * rate,
+              note: 'Purchase return',
+              dateTime: dateTime,
+            ).toMap());
+      }
+    });
+  }
 
   // ---------------- Production & Manufacturing ----------------
   /// Weighted-average purchase cost of an item: total value of all
