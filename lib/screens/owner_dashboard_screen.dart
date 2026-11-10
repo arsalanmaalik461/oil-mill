@@ -154,12 +154,15 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis),
             const SizedBox(height: 2),
-            Text(value,
-                style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                    color: valueColor),
-                overflow: TextOverflow.ellipsis),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Text(value,
+                  style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: valueColor)),
+            ),
           ],
         ),
       ),
@@ -172,7 +175,7 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
         physics: const NeverScrollableScrollPhysics(),
         mainAxisSpacing: 10,
         crossAxisSpacing: 10,
-        childAspectRatio: 1.55,
+        childAspectRatio: 1.4,
         children: cards,
       );
 

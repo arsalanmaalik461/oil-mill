@@ -82,12 +82,14 @@ class _ReportData {
 ///
 /// PROFIT FORMULA (from real saved transactions only):
 ///   Sales        = sum of bill totals in the period (non-deleted bills)
-///   COGS         = sum over the period's bill items of
-///                  qty x getItemUnitCost(itemId)
-///                  (production average cost for manufactured goods,
-///                  weighted-average purchase cost otherwise)
+///   COGS         = sum of the SALE-TIME cost snapshots saved on
+///                  the bill items (legacy lines without a snapshot
+///                  fall back to the current unit cost)
 ///   Gross profit = Sales - COGS
-///   Net profit   = Gross profit - Expense Book expenses of the period
+///   Net profit   = Gross profit - OPERATING Expense Book expenses
+///                  of the period - salaries paid in the period
+/// Headline figures come from DatabaseHelper.getProfitSummary — the
+/// same calculation the Owner Dashboard and general Reports use.
 /// Production expenses of the period are shown for information only:
 /// they are already inside COGS through the unit costs, so they are
 /// NEVER subtracted a second time.
@@ -162,6 +164,13 @@ class _ProductionReportsScreenState extends State<ProductionReportsScreen> {
     final db = DatabaseHelper.instance;
     final bizId = context.read<AppProvider>().businessId;
 
+    // Headline profit figures come from the ONE shared calculation
+    // (Phase 5 audit fix): sales, snapshot COGS, operating expenses,
+    // salaries and net always match the Owner Dashboard and the
+    // general Reports. The loops below only build the breakdowns
+    // (products, customers, batches, stock values).
+    final summary = await db.getProfitSummary(bizId, _start, _end);
+
     final items = await db.getItems(bizId);
     final itemById = <int, StockItem>{
       for (final i in items)
@@ -179,12 +188,9 @@ class _ProductionReportsScreenState extends State<ProductionReportsScreen> {
     // ---- Sales + COGS from bills of the period ----
     final bills =
         (await db.getBills(bizId)).where((b) => _inPeriod(b.dateTime));
-    var sales = 0.0;
-    var cogs = 0.0;
     final prodAgg = <int, _ProdAgg>{};
     final custAgg = <String, double>{};
     for (final bill in bills) {
-      sales += bill.total;
       final name = bill.partyName.isNotEmpty ? bill.partyName : '—';
       custAgg[name] = (custAgg[name] ?? 0) + bill.total;
       if (bill.id == null) continue;
@@ -197,7 +203,6 @@ class _ProductionReportsScreenState extends State<ProductionReportsScreen> {
         // unit cost.
         final lineCogs =
             bi.costAmount ?? bi.qty * await costOf(itemId);
-        cogs += lineCogs;
         final agg = prodAgg.putIfAbsent(
           itemId,
           () => _ProdAgg(bi.name, itemById[itemId]?.unit ?? ''),
@@ -211,16 +216,8 @@ class _ProductionReportsScreenState extends State<ProductionReportsScreen> {
     // ---- Expense Book expenses of the period ----
     // Only OPERATING expenses reduce net profit (Phase 4): owner
     // withdrawals, loan repayments and transfers are tracked apart.
-    var otherExpenses = 0.0;
-    var nonOpExpenses = 0.0;
-    for (final e in await db.getExpenses(bizId)) {
-      if (!_inPeriod(e.dateTime)) continue;
-      if (e.kind == 'operating') {
-        otherExpenses += e.amount;
-      } else {
-        nonOpExpenses += e.amount;
-      }
-    }
+    // (Operating / non-operating expense split lives in
+    // getProfitSummary above — Phase 4 classification.)
 
     // ---- Production expenses of the period (information only) ----
     var prodExpensesInfo = 0.0;
@@ -286,11 +283,11 @@ class _ProductionReportsScreenState extends State<ProductionReportsScreen> {
       ..sort((a, b) => b.value.compareTo(a.value));
 
     return _ReportData(
-      sales: sales,
-      cogs: cogs,
-      otherExpenses: otherExpenses,
-      nonOpExpenses: nonOpExpenses,
-      salaries: await db.getSalaryTotal(bizId, start: _start, end: _end),
+      sales: summary.sales,
+      cogs: summary.cogs,
+      otherExpenses: summary.operatingExpenses,
+      nonOpExpenses: summary.nonOperating,
+      salaries: summary.salaries,
       prodExpensesInfo: prodExpensesInfo,
       rawStockValue: rawValue,
       finishedStockValue: finishedValue,
@@ -329,13 +326,16 @@ class _ProductionReportsScreenState extends State<ProductionReportsScreen> {
               overflow: TextOverflow.ellipsis,
             ),
             const SizedBox(height: 2),
-            Text(
-              value,
-              style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
-                  color: valueColor),
-              overflow: TextOverflow.ellipsis,
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Text(
+                value,
+                style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: valueColor),
+              ),
             ),
           ],
         ),
@@ -415,7 +415,7 @@ class _ProductionReportsScreenState extends State<ProductionReportsScreen> {
                       physics: const NeverScrollableScrollPhysics(),
                       mainAxisSpacing: 10,
                       crossAxisSpacing: 10,
-                      childAspectRatio: 1.55,
+                      childAspectRatio: 1.4,
                       children: [
                         _statCard(
                           _period == 'today' ? p.t('todaysSales') : 'Sales',
