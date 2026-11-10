@@ -7,12 +7,12 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_storage/firebase_storage.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter/foundation.dart';
 
 import '../db/database_helper.dart';
+import '../utils/google_drive_service.dart';
 import '../models/models.dart';
 
 /// Central Firebase Integration Service for Namat Oil Mill.
@@ -476,9 +476,9 @@ extension FirebaseUsers on FirebaseService {
   /// holds a summary (row_count, updated_at). Restore still understands
   /// the legacy layout (a `rows` array on the table document).
   ///
-  /// Entry photos (attachment_path) are uploaded to Firebase Storage
-  /// under users/{username}/... and the row document carries their cloud
-  /// path as `attachment_storage`; restore downloads them back.
+  /// Entry photos (attachment_path) are uploaded to Google Drive
+  /// into the app's Drive folder and the row document carries the
+  /// Drive file id as `attachment_drive_id`; restore downloads them back.
 
   /// How many data rows this user's cloud backup currently holds
   /// (0 = no backup yet). Reads the v2 row_count summaries, falling back
@@ -498,49 +498,61 @@ extension FirebaseUsers on FirebaseService {
     return count;
   }
 
-  /// Uploads one row's attachment photo to Firebase Storage (skipped
-  /// when the same file was already uploaded from this device) and
-  /// records its cloud path on the row as `attachment_storage`.
+  /// Uploads one row's attachment photo to the app's Google Drive
+  /// folder (skipped when the same file was already uploaded from this
+  /// device) and records its Drive file id on the row as
+  /// `attachment_drive_id`. Drive uses silent sign-in only — if Google
+  /// is not connected, the photo is retried on the next sync.
   Future<void> _attachCloudImage(String username, int businessId,
       String table, Map<String, dynamic> row) async {
     final local = row['attachment_path'];
     if (local is! String || local.isEmpty) return;
-    final storagePath =
-        'users/$username/biz$businessId/$table/${row['id'] ?? 'x'}/${p.basename(local)}';
+    final remoteName = 'img_${username}_biz${businessId}_${table}_'
+        '${row['id'] ?? 'x'}_${p.basename(local)}';
     try {
       final file = File(local);
       if (!await file.exists()) return;
       final prefs = await SharedPreferences.getInstance();
-      final key = 'img_uploaded:$storagePath';
+      final key = 'img_drive:$remoteName';
       final size = await file.length();
-      if (prefs.getInt(key) != size) {
-        await FirebaseStorage.instance.ref(storagePath).putFile(file);
-        await prefs.setInt(key, size);
+      final cached = prefs.getString(key);
+      if (cached != null && cached.startsWith('$size:')) {
+        row['attachment_drive_id'] = cached.substring('$size:'.length);
+        return;
       }
-      row['attachment_storage'] = storagePath;
+      final id =
+          await GoogleDriveService.instance.uploadAttachment(file, remoteName);
+      if (id == null) return;
+      await prefs.setString(key, '$size:$id');
+      row['attachment_drive_id'] = id;
     } catch (_) {
       // Best effort: the row still syncs, and the next sync retries.
     }
   }
 
-  /// Inverse of [_attachCloudImage] during restore: downloads the cloud
-  /// photo into the local attachments folder and points the row's
-  /// attachment_path at it. Always strips `attachment_storage` (it is
-  /// not a database column).
+  /// Inverse of [_attachCloudImage] during restore: downloads the photo
+  /// from Google Drive into the local attachments folder and points the
+  /// row's attachment_path at it. Always strips the cloud-only keys
+  /// (they are not database columns).
   Future<void> _resolveCloudImage(Map<String, dynamic> row) async {
-    final storagePath = row.remove('attachment_storage');
-    if (storagePath is! String || storagePath.isEmpty) return;
+    row.remove('attachment_storage'); // legacy key, no longer used
+    final driveId = row.remove('attachment_drive_id');
+    if (driveId is! String || driveId.isEmpty) return;
     try {
       final dir = await getApplicationDocumentsDirectory();
       final attDir = Directory(p.join(dir.path, 'attachments'));
       if (!await attDir.exists()) await attDir.create(recursive: true);
-      final segments = storagePath.split('/');
-      final rowPart = segments.length >= 2 ? segments[segments.length - 2] : 'x';
-      final file =
-          File(p.join(attDir.path, '${rowPart}_${p.basename(storagePath)}'));
+      final oldPath = row['attachment_path'];
+      final base = (oldPath is String && oldPath.isNotEmpty)
+          ? p.basename(oldPath)
+          : 'drive_$driveId';
+      final file = File(p.join(attDir.path, base));
       if (!await file.exists()) {
-        final bytes = await FirebaseStorage.instance.ref(storagePath).getData();
-        if (bytes == null) return;
+        final bytes = await GoogleDriveService.instance.downloadBytes(driveId);
+        if (bytes == null) {
+          row.remove('attachment_path');
+          return;
+        }
         await file.writeAsBytes(bytes);
       }
       row['attachment_path'] = file.path;

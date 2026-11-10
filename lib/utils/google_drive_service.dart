@@ -1,5 +1,6 @@
 import 'backup_notifier.dart';
 import 'dart:async';
+import 'dart:io';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -206,6 +207,70 @@ class GoogleDriveService {
       debugPrint('Automated Drive backup FAILED: $e');
       await BackupNotifier.instance.showBackupFailed();
       return false;
+    }
+  }
+
+  /// Uploads an attachment photo into the app folder under a
+  /// deterministic [remoteName]. If a file with that name and the same
+  /// size already exists there, its id is reused instead of uploading a
+  /// duplicate. Returns the Drive file id, or null when Drive is not
+  /// signed in — silent sign-in only, never prompts from a background
+  /// sync.
+  Future<String?> uploadAttachment(File file, String remoteName) async {
+    if (currentAccount == null) {
+      final silent = await _googleSignIn.signInSilently();
+      if (silent == null) return null;
+    }
+    final client = await _googleSignIn.authenticatedClient();
+    if (client == null) return null;
+    try {
+      final api = drive.DriveApi(client);
+      final folderId = await _findOrCreateFolder(api);
+      final size = await file.length();
+      final escaped = remoteName.replaceAll("'", r"\'");
+      final existing = await api.files.list(
+        q: "'$folderId' in parents and trashed = false and name = '$escaped'",
+        spaces: 'drive',
+        $fields: 'files(id, size)',
+      );
+      for (final f in existing.files ?? const <drive.File>[]) {
+        if ((int.tryParse(f.size ?? '') ?? -1) == size && f.id != null) {
+          return f.id;
+        }
+      }
+      final bytes = await file.readAsBytes();
+      final media = drive.Media(Stream.value(bytes), bytes.length);
+      final meta = drive.File()
+        ..name = remoteName
+        ..parents = [folderId];
+      final created = await api.files.create(meta, uploadMedia: media);
+      return created.id;
+    } finally {
+      client.close();
+    }
+  }
+
+  /// Downloads a Drive file's raw bytes (used for attachment photos).
+  Future<Uint8List?> downloadBytes(String fileId) async {
+    if (currentAccount == null) {
+      final silent = await _googleSignIn.signInSilently();
+      if (silent == null) return null;
+    }
+    final client = await _googleSignIn.authenticatedClient();
+    if (client == null) return null;
+    try {
+      final api = drive.DriveApi(client);
+      final media = await api.files.get(
+        fileId,
+        downloadOptions: drive.DownloadOptions.fullMedia,
+      ) as drive.Media;
+      final chunks = <int>[];
+      await for (final c in media.stream) {
+        chunks.addAll(c);
+      }
+      return Uint8List.fromList(chunks);
+    } finally {
+      client.close();
     }
   }
 
