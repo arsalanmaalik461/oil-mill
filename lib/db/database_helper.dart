@@ -18,8 +18,15 @@ class DatabaseHelper {
     final dir = await getDatabasesPath();
     return openDatabase(
       p.join(dir, 'namat_oil_mill.db'),
-      version: 10,
+      version: 11,
       onUpgrade: (d, oldVersion, newVersion) async {
+        if (oldVersion < 11) {
+          // Phase 5 audit fix: a bill paid via bank/JazzCash/Easypaisa
+          // must not post physical drawer cash — the payment method
+          // now lives on the bill itself.
+          await d.execute(
+              "ALTER TABLE bills ADD COLUMN method TEXT DEFAULT 'cash'");
+        }
         if (oldVersion < 2) {
           // v2: track when a payment reminder was last sent to each party.
           await d.execute(
@@ -131,7 +138,7 @@ class DatabaseHelper {
           supplier_id INTEGER, bill_no TEXT, note TEXT, date_time TEXT, attachment_path TEXT, bill_id INTEGER)''');
         await d.execute('''CREATE TABLE bills(
           id INTEGER PRIMARY KEY AUTOINCREMENT, business_id INTEGER, bill_no INTEGER, party_id INTEGER,
-          party_name TEXT, total REAL, status TEXT, date_time TEXT, deleted INTEGER DEFAULT 0)''');
+          party_name TEXT, total REAL, status TEXT, date_time TEXT, deleted INTEGER DEFAULT 0, method TEXT DEFAULT 'cash')''');
         await d.execute('''CREATE TABLE bill_items(
           id INTEGER PRIMARY KEY AUTOINCREMENT, bill_id INTEGER, item_id INTEGER, name TEXT,
           qty REAL, rate REAL, amount REAL, cost_rate REAL, cost_amount REAL)''');
@@ -612,11 +619,13 @@ class DatabaseHelper {
           'party_id': bill.partyId, 'type': 'wasool', 'amount': bill.total,
           'note': 'Bill #${bill.billNo} payment',
           'date_time': bill.dateTime.toIso8601String(),
-          'attachment_path': null, 'method': 'cash', 'bill_id': bill.id,
+          'attachment_path': null, 'method': bill.method, 'bill_id': bill.id,
         });
       }
     }
-    if (bill.status == 'paid') {
+    // Only a cash-paid bill puts physical money in the drawer; a
+    // bank/JazzCash/Easypaisa payment is recorded on the ledger only.
+    if (bill.status == 'paid' && bill.method == 'cash') {
       await txn.insert('cash_entries', {
         'business_id': businessId, 'type': 'in', 'amount': bill.total,
         'note': 'Bill #${bill.billNo}', 'party_id': bill.partyId,
@@ -753,7 +762,9 @@ class DatabaseHelper {
             'WHERE bill_id = ? OR (bill_id IS NULL AND bill_no = ?)',
             [b.id, no]),
         d.rawQuery('SELECT COUNT(*) AS c FROM party_transactions '
-            'WHERE bill_id = ?', [b.id]),
+            'WHERE bill_id = ? OR (bill_id IS NULL AND party_id = ? '
+            'AND note IN (?, ?))',
+            [b.id, b.partyId, 'Bill #$no', 'Bill #$no payment']),
         d.rawQuery('SELECT COUNT(*) AS c FROM cash_entries '
             'WHERE (source_table = ? AND source_id = ?) OR '
             '(source_id IS NULL AND business_id = ? AND note = ?)',
@@ -1097,8 +1108,48 @@ class DatabaseHelper {
       (await db).update('qr_payments', {'status': status},
           where: 'id = ?', whereArgs: [id]);
 
-  Future<void> deleteQrPayment(int id) async =>
-      (await db).delete('qr_payments', where: 'id = ?', whereArgs: [id]);
+  /// Deletes a QR payment. A CONFIRMED payment already posted a
+  /// party wasool and (for cash) a drawer entry — those are reversed
+  /// in the same transaction so deleting can never orphan money in
+  /// the books (Phase 1 audit fix).
+  Future<void> deleteQrPayment(int id) async {
+    final d = await db;
+    await d.transaction((txn) async {
+      final rows =
+          await txn.query('qr_payments', where: 'id = ?', whereArgs: [id]);
+      if (rows.isEmpty) return;
+      final q = QrPayment.fromMap(rows.first);
+      if (q.status == 'confirmed') {
+        if (q.partyId != null) {
+          final cands = await txn.query('party_transactions',
+              columns: ['id', 'date_time'],
+              where: "party_id = ? AND type = 'wasool' AND amount = ? "
+                  "AND note = 'QR payment'",
+              whereArgs: [q.partyId, q.amount]);
+          for (final c in cands) {
+            if (c['date_time'] == q.dateTime.toIso8601String()) {
+              await txn.delete('party_transactions',
+                  where: 'id = ?', whereArgs: [c['id']]);
+              break;
+            }
+          }
+        }
+        await _deleteLinkedCash(txn, 'qr_payments', id);
+      }
+      await txn.delete('qr_payments', where: 'id = ?', whereArgs: [id]);
+    });
+  }
+
+  /// Deletes a salary payment and its linked drawer cash-out in one
+  /// transaction (Phase 1 audit fix: salary entries previously had
+  /// no correction path at all).
+  Future<void> deleteSalaryPayment(int id) async {
+    final d = await db;
+    await d.transaction((txn) async {
+      await _deleteLinkedCash(txn, 'salary_payments', id);
+      await txn.delete('salary_payments', where: 'id = ?', whereArgs: [id]);
+    });
+  }
 
   // ---------------- Raw material purchases (atomic) ----------------
   /// Saves a raw-material purchase in ONE transaction: stock-in, the
@@ -1849,6 +1900,7 @@ class DatabaseHelper {
     'salary_payments', 'bank_accounts', 'bank_transactions', 'expenses',
     'wallet_transactions', 'qr_payments', 'production_batches',
     'production_inputs', 'production_outputs', 'production_expenses',
+    'daily_closings',
   ];
 
   Future<String> exportJson() async {
@@ -1890,6 +1942,7 @@ class DatabaseHelper {
   static const _bizTables = [
     'parties', 'cash_entries', 'items', 'bills', 'staff', 'bank_accounts',
     'expenses', 'wallet_transactions', 'qr_payments', 'production_batches',
+    'daily_closings',
   ];
   static const _childTables = <String, String>{
     'party_transactions': 'parties',

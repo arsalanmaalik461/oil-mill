@@ -218,23 +218,28 @@ class Bill {
   final String status;
   final DateTime dateTime;
   final int deleted;
+
+  /// How a PAID bill was settled: 'cash' | 'bank' | 'jazzcash' |
+  /// 'easypaisa' (DB v11). Only 'cash' posts a drawer cash-in.
+  final String method;
   Bill({
     this.id, required this.businessId, required this.billNo, this.partyId,
     this.partyName = '', required this.total, this.status = 'paid',
-    required this.dateTime, this.deleted = 0,
+    required this.dateTime, this.deleted = 0, this.method = 'cash',
   });
   Map<String, dynamic> toMap() => {
         if (id != null) 'id': id,
         'business_id': businessId, 'bill_no': billNo, 'party_id': partyId,
         'party_name': partyName, 'total': total, 'status': status,
         'date_time': dateTime.toIso8601String(), 'deleted': deleted,
+        'method': method,
       };
   factory Bill.fromMap(Map<String, dynamic> m) => Bill(
         id: m['id'] as int?, businessId: m['business_id'] ?? 1, billNo: m['bill_no'] ?? 0,
         partyId: m['party_id'], partyName: m['party_name'] ?? '',
         total: (m['total'] ?? 0).toDouble(), status: m['status'] ?? 'paid',
         dateTime: DateTime.tryParse(m['date_time'] ?? '') ?? DateTime.now(),
-        deleted: m['deleted'] ?? 0,
+        deleted: m['deleted'] ?? 0, method: m['method'] ?? 'cash',
       );
 }
 
