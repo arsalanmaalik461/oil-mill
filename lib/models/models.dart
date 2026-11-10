@@ -147,16 +147,23 @@ class StockItem {
   final double openingQty;
   final double lowStockLimit;
   final int deleted;
+
+  /// Density in kg per litre for litre-measured items (e.g. oil
+  /// ~0.92). Null when not applicable; used to convert litres to kg
+  /// for joint-cost allocation.
+  final double? density;
   StockItem({
     this.id, required this.businessId, required this.name, this.unit = 'pcs',
     this.category = '', this.kind = 'general',
     this.openingQty = 0, this.lowStockLimit = 0, this.deleted = 0,
+    this.density,
   });
   Map<String, dynamic> toMap() => {
         if (id != null) 'id': id,
         'business_id': businessId, 'name': name, 'unit': unit, 'category': category,
         'kind': kind,
         'opening_qty': openingQty, 'low_stock_limit': lowStockLimit, 'deleted': deleted,
+        'density': density,
       };
   factory StockItem.fromMap(Map<String, dynamic> m) => StockItem(
         id: m['id'] as int?, businessId: m['business_id'] ?? 1, name: m['name'] ?? '',
@@ -164,6 +171,7 @@ class StockItem {
         kind: m['kind'] ?? 'general',
         openingQty: (m['opening_qty'] ?? 0).toDouble(),
         lowStockLimit: (m['low_stock_limit'] ?? 0).toDouble(), deleted: m['deleted'] ?? 0,
+        density: (m['density'] as num?)?.toDouble(),
       );
 }
 
@@ -237,16 +245,26 @@ class BillItem {
   final String name;
   final double qty;
   final double rate;
+
+  /// COGS snapshot taken at the moment of sale (Phase 2): the item's
+  /// unit cost then, and qty x cost. Null on bills created before the
+  /// snapshot existed (reports fall back to the current unit cost for
+  /// those) and on free-text lines, whose cost is unknown.
+  final double? costRate;
+  final double? costAmount;
   double get amount => qty * rate;
-  BillItem({this.id, required this.billId, this.itemId, required this.name, required this.qty, required this.rate});
+  BillItem({this.id, required this.billId, this.itemId, required this.name, required this.qty, required this.rate, this.costRate, this.costAmount});
   Map<String, dynamic> toMap() => {
         if (id != null) 'id': id,
         'bill_id': billId, 'item_id': itemId, 'name': name, 'qty': qty,
         'rate': rate, 'amount': amount,
+        'cost_rate': costRate, 'cost_amount': costAmount,
       };
   factory BillItem.fromMap(Map<String, dynamic> m) => BillItem(
         id: m['id'] as int?, billId: m['bill_id'], itemId: m['item_id'],
         name: m['name'] ?? '', qty: (m['qty'] ?? 0).toDouble(), rate: (m['rate'] ?? 0).toDouble(),
+        costRate: (m['cost_rate'] as num?)?.toDouble(),
+        costAmount: (m['cost_amount'] as num?)?.toDouble(),
       );
 }
 
@@ -448,16 +466,21 @@ class ProductionBatch {
   final String note;
   final double wastageQty;
   final String wastageNote;
+
+  /// Joint-cost allocation method: 'quantity' (kg-normalised) or
+  /// 'value' (relative sales value of the outputs).
+  final String allocationMethod;
   ProductionBatch({
     this.id, required this.businessId, required this.batchNo,
     required this.dateTime, this.status = 'completed', this.note = '',
-    this.wastageQty = 0, this.wastageNote = '',
+    this.wastageQty = 0, this.wastageNote = '', this.allocationMethod = 'quantity',
   });
   Map<String, dynamic> toMap() => {
         if (id != null) 'id': id,
         'business_id': businessId, 'batch_no': batchNo,
         'date_time': dateTime.toIso8601String(), 'status': status,
         'note': note, 'wastage_qty': wastageQty, 'wastage_note': wastageNote,
+        'allocation_method': allocationMethod,
       };
   factory ProductionBatch.fromMap(Map<String, dynamic> m) => ProductionBatch(
         id: m['id'] as int?, businessId: m['business_id'] ?? 1,
@@ -466,6 +489,7 @@ class ProductionBatch {
         status: m['status'] ?? 'completed', note: m['note'] ?? '',
         wastageQty: (m['wastage_qty'] ?? 0).toDouble(),
         wastageNote: m['wastage_note'] ?? '',
+        allocationMethod: m['allocation_method'] ?? 'quantity',
       );
 }
 

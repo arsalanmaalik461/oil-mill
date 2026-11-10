@@ -18,7 +18,7 @@ class DatabaseHelper {
     final dir = await getDatabasesPath();
     return openDatabase(
       p.join(dir, 'namat_oil_mill.db'),
-      version: 7,
+      version: 8,
       onUpgrade: (d, oldVersion, newVersion) async {
         if (oldVersion < 2) {
           // v2: track when a payment reminder was last sent to each party.
@@ -53,6 +53,16 @@ class DatabaseHelper {
           // app login username (Firebase app_users record).
           await d.execute(
               "ALTER TABLE businesses ADD COLUMN app_username TEXT DEFAULT ''");
+        }
+        if (oldVersion < 8) {
+          // v8 (Phase 2 — inventory & COGS): sale-time cost snapshot on
+          // bill lines, joint-cost allocation method on batches, and
+          // density (kg per litre) on items.
+          await d.execute('ALTER TABLE bill_items ADD COLUMN cost_rate REAL');
+          await d.execute('ALTER TABLE bill_items ADD COLUMN cost_amount REAL');
+          await d.execute(
+              "ALTER TABLE production_batches ADD COLUMN allocation_method TEXT DEFAULT 'quantity'");
+          await d.execute('ALTER TABLE items ADD COLUMN density REAL');
         }
         if (oldVersion < 7) {
           // v7 (Phase 1 — cash accounting): payment method on ledger
@@ -95,7 +105,7 @@ class DatabaseHelper {
         await d.execute('''CREATE TABLE items(
           id INTEGER PRIMARY KEY AUTOINCREMENT, business_id INTEGER, name TEXT, unit TEXT,
           opening_qty REAL DEFAULT 0, low_stock_limit REAL DEFAULT 0, deleted INTEGER DEFAULT 0,
-          category TEXT, kind TEXT)''');
+          category TEXT, kind TEXT, density REAL)''');
         await d.execute('''CREATE TABLE stock_transactions(
           id INTEGER PRIMARY KEY AUTOINCREMENT, item_id INTEGER, type TEXT, qty REAL, rate REAL,
           supplier_id INTEGER, bill_no TEXT, note TEXT, date_time TEXT, attachment_path TEXT)''');
@@ -104,7 +114,7 @@ class DatabaseHelper {
           party_name TEXT, total REAL, status TEXT, date_time TEXT, deleted INTEGER DEFAULT 0)''');
         await d.execute('''CREATE TABLE bill_items(
           id INTEGER PRIMARY KEY AUTOINCREMENT, bill_id INTEGER, item_id INTEGER, name TEXT,
-          qty REAL, rate REAL, amount REAL)''');
+          qty REAL, rate REAL, amount REAL, cost_rate REAL, cost_amount REAL)''');
         await d.execute('''CREATE TABLE staff(
           id INTEGER PRIMARY KEY AUTOINCREMENT, business_id INTEGER, name TEXT, phone TEXT,
           monthly_salary REAL DEFAULT 0, deleted INTEGER DEFAULT 0)''');
@@ -131,7 +141,8 @@ class DatabaseHelper {
           payer_name TEXT, amount REAL, method TEXT, status TEXT, note TEXT, date_time TEXT)''');
         await d.execute('''CREATE TABLE production_batches(
           id INTEGER PRIMARY KEY AUTOINCREMENT, business_id INTEGER, batch_no INTEGER,
-          date_time TEXT, status TEXT, note TEXT, wastage_qty REAL DEFAULT 0, wastage_note TEXT)''');
+          date_time TEXT, status TEXT, note TEXT, wastage_qty REAL DEFAULT 0, wastage_note TEXT,
+          allocation_method TEXT DEFAULT 'quantity')''');
         await d.execute('''CREATE TABLE production_inputs(
           id INTEGER PRIMARY KEY AUTOINCREMENT, batch_id INTEGER, item_id INTEGER,
           qty REAL, rate REAL, cost REAL)''');
@@ -498,10 +509,26 @@ class DatabaseHelper {
     required List<BillItem> items,
   }) async {
     final d = await db;
+    // COGS snapshot (Phase 2): price every stocked line at the unit
+    // cost of THIS moment, before the sale is posted. Reports read the
+    // snapshot, so a later purchase can never rewrite a past period's
+    // profit. Free-text lines keep a null cost (unknown, flagged).
+    final costOf = <int, double>{};
+    for (final it in items) {
+      if (it.itemId != null && !costOf.containsKey(it.itemId)) {
+        costOf[it.itemId!] = await getItemUnitCost(it.itemId!);
+      }
+    }
     return d.transaction((txn) async {
       final billId = await txn.insert('bills', bill.toMap());
       for (final it in items) {
-        await txn.insert('bill_items', {...it.toMap(), 'bill_id': billId});
+        final unitCost = it.itemId == null ? null : costOf[it.itemId!];
+        await txn.insert('bill_items', {
+          ...it.toMap(),
+          'bill_id': billId,
+          'cost_rate': unitCost,
+          'cost_amount': unitCost == null ? null : unitCost * it.qty,
+        });
         if (it.itemId != null) {
           await txn.insert('stock_transactions', {
             'item_id': it.itemId, 'type': 'out', 'qty': it.qty, 'rate': it.rate,
@@ -906,9 +933,51 @@ class DatabaseHelper {
     return 0;
   }
 
-  /// The unit cost used for COGS / valuation of an item: production cost
-  /// for manufactured goods, weighted-average purchase cost otherwise.
+  /// Perpetual (moving) weighted-average unit cost, replayed from the
+  /// item's stock history in chronological order: every stock-IN adds
+  /// qty x rate to the pool; every stock-OUT removes qty at the pool's
+  /// current average. Consumed stock therefore LEAVES the pool — the
+  /// old lifetime formula (all receipts ever) priced new batches from
+  /// long-consumed lots. Returns the pool's unit cost, or the last
+  /// known unit cost when the pool is empty, or 0 with no costed
+  /// history. Out-row rates are ignored on purpose (bill outs carry
+  /// SALE rates; the pool average is the cost).
+  Future<double> _replayUnitCost(DatabaseExecutor e, int itemId) async {
+    final rows = await e.query('stock_transactions',
+        where: 'item_id = ?', whereArgs: [itemId],
+        orderBy: 'date_time ASC, id ASC');
+    var poolQty = 0.0;
+    var poolValue = 0.0;
+    var lastCost = 0.0;
+    for (final r in rows) {
+      final qty = (r['qty'] as num).toDouble();
+      final rate = (r['rate'] as num).toDouble();
+      if (r['type'] == 'in') {
+        if (rate > 0) {
+          poolQty += qty;
+          poolValue += qty * rate;
+          if (poolQty > 0) lastCost = poolValue / poolQty;
+        }
+      } else if (poolQty > 0) {
+        final avg = poolValue / poolQty;
+        lastCost = avg;
+        final take = qty < poolQty ? qty : poolQty;
+        poolValue -= take * avg;
+        poolQty -= take;
+      }
+    }
+    if (poolQty > 0) return poolValue / poolQty;
+    return lastCost;
+  }
+
+  /// The unit cost used for COGS / valuation of an item: the perpetual
+  /// moving average of the stock actually on hand. Falls back to the
+  /// production average, then the lifetime purchase average, for items
+  /// with no replayable stock history (e.g. opening-qty only).
   Future<double> getItemUnitCost(int itemId) async {
+    final d = await db;
+    final replay = await _replayUnitCost(d, itemId);
+    if (replay > 0) return replay;
     final produced = await getItemProductionAvgCost(itemId);
     if (produced > 0) return produced;
     return getItemAvgCost(itemId);
@@ -951,23 +1020,7 @@ class DatabaseHelper {
         return opening + (r.first['s'] as num).toDouble();
       }
 
-      Future<double> wacOf(int itemId) async {
-        final r = await txn.rawQuery(
-          "SELECT COALESCE(SUM(qty * rate), 0) AS v, COALESCE(SUM(qty), 0) AS q "
-          "FROM stock_transactions WHERE item_id = ? AND type = 'in' AND rate > 0",
-          [itemId],
-        );
-        final q = (r.first['q'] as num).toDouble();
-        if (q > 0) return (r.first['v'] as num).toDouble() / q;
-        final rows = await txn.query('stock_transactions',
-            where: 'item_id = ?', whereArgs: [itemId],
-            orderBy: 'date_time DESC, id DESC');
-        for (final row in rows) {
-          final rate = (row['rate'] as num).toDouble();
-          if (rate > 0) return rate;
-        }
-        return 0;
-      }
+      Future<double> wacOf(int itemId) => _replayUnitCost(txn, itemId);
 
       Future<String> nameOf(int itemId) async {
         final rows = await txn.query('items', where: 'id = ?', whereArgs: [itemId]);

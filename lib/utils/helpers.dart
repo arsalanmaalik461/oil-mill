@@ -13,9 +13,16 @@ final dayKeyFmt = DateFormat('yyyy-MM-dd');
 
 /// How many KG one unit of [unit] weighs, for production cost conversions
 /// (cost per KG / per 40 KG / per ton). Unknown units count as 1.
-double unitToKgFactor(String unit) {
+double unitToKgFactor(String unit, {double? densityKgPerLitre}) {
   final u = unit.toLowerCase();
   if (u.contains('ton')) return 1000;
+  if (u.contains('mann') || u.contains('maund') || u.contains('mun')) {
+    return 40;
+  }
+  if (u.contains('litre') || u.contains('liter') || u.contains('ltr')) {
+    // 1 litre of oil is NOT 1 kg; use the item's density when known.
+    return densityKgPerLitre ?? 1;
+  }
   if (u.contains('40')) return 40;
   if (u.contains('kg')) return 1;
   return 1;
