@@ -60,6 +60,7 @@ class _ProductionBatchFormScreenState extends State<ProductionBatchFormScreen> {
   final List<_ExpenseRow> _expenses = [];
   final _wastageQtyCtrl = TextEditingController();
   final _wastageNoteCtrl = TextEditingController();
+  final _expectedRecoveryCtrl = TextEditingController();
   int _batchNo = 0;
   DateTime _date = DateTime.now();
   bool _allowNegative = false;
@@ -99,6 +100,7 @@ class _ProductionBatchFormScreenState extends State<ProductionBatchFormScreen> {
     }
     _wastageQtyCtrl.dispose();
     _wastageNoteCtrl.dispose();
+    _expectedRecoveryCtrl.dispose();
     super.dispose();
   }
 
@@ -175,6 +177,8 @@ class _ProductionBatchFormScreenState extends State<ProductionBatchFormScreen> {
           wastageQty: double.tryParse(_wastageQtyCtrl.text.trim()) ?? 0,
           wastageNote: _wastageNoteCtrl.text.trim(),
           allocationMethod: _allocMethod,
+          expectedRecoveryPct:
+              double.tryParse(_expectedRecoveryCtrl.text.trim()),
         ),
         inputs: inputs,
         outputs: outputs,
@@ -328,9 +332,16 @@ class _ProductionBatchFormScreenState extends State<ProductionBatchFormScreen> {
                 ),
               ],
             ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _expectedRecoveryCtrl,
+              decoration: InputDecoration(labelText: p.t('expRecovery')),
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+            ),
             const SizedBox(height: 4),
             const Text(
-              'Record only — enter the NET output above; wastage is kept in the batch history, not posted to stock again.',
+              'Wastage is recorded for yield analysis (expected vs actual recovery shows on the batch and in reports); enter the NET output above — wastage is not posted to stock again.',
               style: TextStyle(fontSize: 12, color: AppColors.textGrey),
             ),
 

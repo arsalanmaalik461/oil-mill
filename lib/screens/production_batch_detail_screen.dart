@@ -18,6 +18,16 @@ class _BatchDetail {
   double get materialCost => inputs.fold<double>(0, (s, i) => s + i.cost);
   double get expenseTotal => expenses.fold<double>(0, (s, e) => s + e.amount);
   double get totalCost => materialCost + expenseTotal;
+
+  double _kg(double qty, StockItem? item) => item == null
+      ? qty
+      : qty * unitToKgFactor(item.unit, densityKgPerLitre: item.density);
+  double get inputKg =>
+      inputs.fold<double>(0, (s, i) => s + _kg(i.qty, itemById[i.itemId]));
+  double get outputKg =>
+      outputs.fold<double>(0, (s, o) => s + _kg(o.qty, itemById[o.itemId]));
+  double get recoveryPct => inputKg > 0 ? outputKg / inputKg * 100 : 0;
+  double get unexplainedKg => inputKg - outputKg - batch.wastageQty;
 }
 
 /// One production batch in full: materials consumed (at their WAC
@@ -115,13 +125,14 @@ class _ProductionBatchDetailScreenState
             style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
       );
 
-  Widget _row(String label, String value, {bool bold = false}) => Padding(
+  Widget _row(String label, String value, {bool bold = false, Color? color}) => Padding(
         padding: const EdgeInsets.symmetric(vertical: 3),
         child: Row(
           children: [
             Expanded(child: Text(label)),
             Text(value,
                 style: TextStyle(
+                    color: color,
                     fontWeight: bold ? FontWeight.w800 : FontWeight.w600,
                     fontSize: bold ? 16 : 14)),
           ],
@@ -326,6 +337,30 @@ class _ProductionBatchDetailScreenState
                 ],
 
                 // ---------------- Wastage ----------------
+                _sectionTitle(p.t('actRecovery')),
+                Card(
+                  child: Column(
+                    children: [
+                      _row(
+                          '${p.t('actRecovery')} %',
+                          '${d.recoveryPct.toStringAsFixed(1)}%',
+                          bold: true),
+                      if (b.expectedRecoveryPct != null) ...[
+                        _row('${p.t('expRecovery')}',
+                            '${b.expectedRecoveryPct!.toStringAsFixed(1)}%'),
+                        _row(
+                          p.t('variance'),
+                          '${(d.recoveryPct - b.expectedRecoveryPct!).toStringAsFixed(1)}%',
+                          color: d.recoveryPct >= b.expectedRecoveryPct!
+                              ? AppColors.green
+                              : AppColors.red,
+                        ),
+                      ],
+                      _row(p.t('unexplainedLoss'),
+                          '${formatQty(d.unexplainedKg > 0 ? d.unexplainedKg : 0)} kg'),
+                    ],
+                  ),
+                ),
                 if (b.wastageQty > 0) ...[
                   _sectionTitle(p.t('wastage')),
                   Card(
