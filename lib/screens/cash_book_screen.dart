@@ -8,6 +8,7 @@ import '../providers/app_provider.dart';
 import '../theme/app_theme.dart';
 import '../utils/helpers.dart';
 import '../utils/pdf_service.dart';
+import 'cash_entry_form_screen.dart';
 
 final _timeFmt = DateFormat('hh:mm a');
 
@@ -93,127 +94,12 @@ class _CashBookScreenState extends State<CashBookScreen> {
     context.read<AppProvider>().bump();
   }
 
-  Future<void> _showEntryForm(String type, List<Party> parties) async {
-    final p = context.read<AppProvider>();
-    final amountCtrl = TextEditingController();
-    final noteCtrl = TextEditingController();
-    var selectedDate = DateTime.now();
-    int? selectedPartyId;
-    String? attachment;
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (bc) => StatefulBuilder(
-        builder: (bc, setSheetState) => Padding(
-          padding: EdgeInsets.only(
-            left: 16,
-            right: 16,
-            top: 16,
-            bottom: MediaQuery.of(bc).viewInsets.bottom + 16,
-          ),
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  type == 'in' ? p.t('cashIn') : p.t('cashOut'),
-                  style: const TextStyle(
-                      fontSize: 17, fontWeight: FontWeight.w700),
-                ),
-                const SizedBox(height: 14),
-                TextField(
-                  controller: amountCtrl,
-                  decoration: InputDecoration(labelText: p.t('amount')),
-                  keyboardType:
-                      const TextInputType.numberWithOptions(decimal: true),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: noteCtrl,
-                  decoration: InputDecoration(labelText: p.t('note')),
-                ),
-                const SizedBox(height: 12),
-                DropdownButtonFormField<int?>(
-                  value: selectedPartyId,
-                  decoration: InputDecoration(
-                      labelText: '${p.t('customer')} / ${p.t('supplier')}'),
-                  items: [
-                    DropdownMenuItem<int?>(
-                        value: null, child: Text(p.t('none'))),
-                    ...parties.map((party) => DropdownMenuItem<int?>(
-                          value: party.id,
-                          child: Text(party.name),
-                        )),
-                  ],
-                  onChanged: (v) =>
-                      setSheetState(() => selectedPartyId = v),
-                ),
-                const SizedBox(height: 6),
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.calendar_month),
-                  title: Text(dateTimeFmt.format(selectedDate)),
-                  onTap: () async {
-                    final picked = await pickDateTime(bc, selectedDate);
-                    if (picked != null) {
-                      setSheetState(() => selectedDate = picked);
-                    }
-                  },
-                ),
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.camera_alt),
-                  title: Text(attachment == null
-                      ? p.t('attachBill')
-                      : attachment!.split('/').last),
-                  onTap: () async {
-                    final path = await pickAttachment(bc);
-                    if (path != null) setSheetState(() => attachment = path);
-                  },
-                ),
-                const SizedBox(height: 10),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor:
-                          type == 'in' ? AppColors.green : AppColors.red,
-                    ),
-                    onPressed: () async {
-                      final amount = double.tryParse(amountCtrl.text.trim());
-                      if (amount == null || amount <= 0) {
-                        showSnack(bc, p.t('invalidAmount'));
-                        return;
-                      }
-                      await DatabaseHelper.instance.insertCashEntry(
-                        CashEntry(
-                          businessId: p.businessId,
-                          type: type,
-                          amount: amount,
-                          note: noteCtrl.text.trim(),
-                          partyId: selectedPartyId,
-                          dateTime: selectedDate,
-                          attachmentPath: attachment,
-                        ),
-                      );
-                      if (!bc.mounted) return;
-                      Navigator.pop(bc);
-                      if (!mounted) return;
-                      _reload();
-                      context.read<AppProvider>().bump();
-                    },
-                    child: Text(p.t('save')),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
+  Future<void> _showEntryForm(String type) async {
+    final r = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => CashEntryFormScreen(type: type)),
     );
-    amountCtrl.dispose();
-    noteCtrl.dispose();
+    if (r == true && mounted) _reload();
   }
 
   @override
@@ -493,7 +379,7 @@ class _CashBookScreenState extends State<CashBookScreen> {
                   style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.red),
                   onPressed: () =>
-                      _showEntryForm('out', _lastData?.parties ?? []),
+                      _showEntryForm('out'),
                   child: Text(p.t('cashOut')),
                 ),
               ),
@@ -503,7 +389,7 @@ class _CashBookScreenState extends State<CashBookScreen> {
                   style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.green),
                   onPressed: () =>
-                      _showEntryForm('in', _lastData?.parties ?? []),
+                      _showEntryForm('in'),
                   child: Text(p.t('cashIn')),
                 ),
               ),
