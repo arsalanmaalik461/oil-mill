@@ -201,3 +201,86 @@ Future<TimeOfDay?> pickTimeOnly(BuildContext context, DateTime initial) {
     initialTime: TimeOfDay.fromDateTime(initial),
   );
 }
+
+/// True when [dt] falls inside the optional day range [start]..[end]
+/// (both inclusive, compared by calendar day).
+bool inDateRange(DateTime dt, DateTime? start, DateTime? end) {
+  final day = DateTime(dt.year, dt.month, dt.day);
+  if (start != null && day.isBefore(DateTime(start.year, start.month, start.day))) {
+    return false;
+  }
+  if (end != null && day.isAfter(DateTime(end.year, end.month, end.day))) {
+    return false;
+  }
+  return true;
+}
+
+/// Asks the user for a date range (All Time / Today / This Week / This
+/// Month / Last Month / Custom calendar range). Returns null when the
+/// dialog is dismissed. `start`/`end` are null for All Time.
+Future<({DateTime? start, DateTime? end, String label})?> pickDateRange(
+  BuildContext context,
+  String Function(String key) t,
+) async {
+  final choice = await showDialog<String>(
+    context: context,
+    builder: (ctx) => SimpleDialog(
+      title: Text(t('dateRange')),
+      children: [
+        for (final entry in const [
+          ('all', 'rangeAll'),
+          ('today', 'rangeToday'),
+          ('week', 'rangeThisWeek'),
+          ('month', 'rangeThisMonth'),
+          ('lastMonth', 'rangeLastMonth'),
+          ('custom', 'rangeCustom'),
+        ])
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(ctx, entry.$1),
+            child: Text(t(entry.$2)),
+          ),
+      ],
+    ),
+  );
+  if (choice == null || !context.mounted) return null;
+  final now = DateTime.now();
+  DateTime day(DateTime x) => DateTime(x.year, x.month, x.day);
+  switch (choice) {
+    case 'all':
+      return (start: null, end: null, label: t('rangeAll'));
+    case 'today':
+      return (start: day(now), end: day(now), label: t('rangeToday'));
+    case 'week':
+      return (
+        start: day(now).subtract(Duration(days: now.weekday - 1)),
+        end: day(now),
+        label: t('rangeThisWeek')
+      );
+    case 'month':
+      return (
+        start: DateTime(now.year, now.month, 1),
+        end: day(now),
+        label: t('rangeThisMonth')
+      );
+    case 'lastMonth':
+      return (
+        start: DateTime(now.year, now.month - 1, 1),
+        end: DateTime(now.year, now.month, 0),
+        label: t('rangeLastMonth')
+      );
+    case 'custom':
+      final r = await showDateRangePicker(
+        context: context,
+        firstDate: DateTime(2000),
+        lastDate: DateTime(2100),
+      );
+      if (r == null) return null;
+      final f = DateFormat('dd MMM yy');
+      return (
+        start: day(r.start),
+        end: day(r.end),
+        label: '${f.format(r.start)} – ${f.format(r.end)}'
+      );
+  }
+  return null;
+}

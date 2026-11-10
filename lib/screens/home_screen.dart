@@ -7,15 +7,11 @@ import '../providers/app_provider.dart';
 import '../theme/app_theme.dart';
 import '../utils/helpers.dart';
 import '../utils/pdf_service.dart';
+import '../services/firebase_service.dart';
 import 'bank_detail_screen.dart';
-import 'bill_book_screen.dart';
-import 'cash_book_screen.dart';
 import 'party_detail_screen.dart';
 import 'party_form_screen.dart';
 import 'reminders_screen.dart';
-import 'roznamcha_screen.dart';
-import 'staff_book_screen.dart';
-import 'stock_book_screen.dart';
 
 class _PartyRow {
   final Party party;
@@ -59,6 +55,24 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _autoSyncOnStart());
+  }
+
+  /// A returning, already-signed-in user gets a background cloud sync
+  /// when the app opens, so the Firebase backup stays current on its own.
+  Future<void> _autoSyncOnStart() async {
+    final p = context.read<AppProvider>();
+    if (!p.isLoggedIn || p.businessId <= 0) return;
+    try {
+      await FirebaseService.instance
+          .syncUserData(p.sessionUsername, p.businessId);
+    } catch (_) {}
+  }
+
   String _tab = 'customers'; // customers | suppliers | dealers | banks | all
   String _search = '';
   String _filter = 'all'; // all | get | give (party list filter)
@@ -236,7 +250,8 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _exportPdf(_HomeData data) async {
     final p = context.read<AppProvider>();
     if (_tab == 'banks') {
-      await shareReportPdf(
+      try {
+        await shareReportPdf(
         business: data.business,
         title: p.t('bankBook'),
         headers: [p.t('bankName'), p.t('accountNo'), p.t('bankBalance')],
@@ -247,23 +262,36 @@ class _HomeScreenState extends State<HomeScreen> {
                   formatRs(r.balance),
                 ])
             .toList(),
-        summaryLine: '${p.t('total')}: ${formatRs(data.bankTotal)}',
-      );
+          summaryLine: '${p.t('total')}: ${formatRs(data.bankTotal)}',
+        );
+      } catch (_) {
+        if (mounted) showSnack(context, p.t('pdfError'));
+      }
       return;
     }
     // Business-wide Account Statement in the original app's format,
-    // covering the parties of the current tab.
+    // covering the parties of the current tab, for a chosen date range.
+    final range = await pickDateRange(context, p.t);
+    if (range == null || !mounted) return;
     final db = DatabaseHelper.instance;
     final parties = data.parties.map((r) => r.party).toList();
     final byParty = <int, List<PartyTransaction>>{};
     for (final party in parties) {
-      byParty[party.id!] = await db.getPartyTransactions(party.id!);
+      final txns = await db.getPartyTransactions(party.id!);
+      byParty[party.id!] = txns
+          .where((t) => inDateRange(t.dateTime, range.start, range.end))
+          .toList();
     }
-    await shareStatementPdf(
-      business: data.business,
-      parties: parties,
-      transactionsByParty: byParty,
-    );
+    try {
+      await shareStatementPdf(
+        business: data.business,
+        parties: parties,
+        transactionsByParty: byParty,
+        periodLabel: range.start == null ? null : range.label,
+      );
+    } catch (_) {
+      if (mounted) showSnack(context, p.t('pdfError'));
+    }
   }
 
   // ---------------- UI pieces ----------------
@@ -292,36 +320,6 @@ class _HomeScreenState extends State<HomeScreen> {
             color: selected ? Colors.white : Colors.transparent,
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _moduleButton(IconData icon, String label, VoidCallback onTap) {
-    return Expanded(
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(10),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(11),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: AppColors.cardBorder),
-              ),
-              child: Icon(icon, color: AppColors.accent, size: 24),
-            ),
-            const SizedBox(height: 5),
-            Text(
-              label,
-              textAlign: TextAlign.center,
-              maxLines: 2,
-              style: const TextStyle(fontSize: 11),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -537,44 +535,6 @@ class _HomeScreenState extends State<HomeScreen> {
                       child: Center(child: CircularProgressIndicator()))
                 else ...[
                   _summaryCard(p, data),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(12, 12, 12, 2),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        _moduleButton(Icons.book, p.t('cashBook'), () {
-                          Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                  builder: (_) => const CashBookScreen()));
-                        }),
-                        _moduleButton(Icons.auto_stories, p.t('roznamcha'), () {
-                          Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                  builder: (_) => const RoznamchaScreen()));
-                        }),
-                        _moduleButton(Icons.inventory_2, p.t('stockBook'), () {
-                          Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                  builder: (_) => const StockBookScreen()));
-                        }),
-                        _moduleButton(Icons.receipt_long, p.t('billBook'), () {
-                          Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                  builder: (_) => const BillBookScreen()));
-                        }),
-                        _moduleButton(Icons.groups, p.t('staffBook'), () {
-                          Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                  builder: (_) => const StaffBookScreen()));
-                        }),
-                      ],
-                    ),
-                  ),
                   Padding(
                     padding: const EdgeInsets.fromLTRB(16, 8, 8, 4),
                     child: Row(

@@ -32,6 +32,9 @@ class PartyDetailScreen extends StatefulWidget {
 }
 
 class _PartyDetailScreenState extends State<PartyDetailScreen> {
+  DateTime? _viewStart;
+  DateTime? _viewEnd;
+  String? _viewLabel;
   late Future<_DetailData> _future;
 
   @override
@@ -49,6 +52,41 @@ class _PartyDetailScreenState extends State<PartyDetailScreen> {
   }
 
   void _reload() => setState(() => _future = _load());
+
+  /// Ledger PDF for a user-chosen date range. The running balance starts
+  /// from the balance carried into the range, and any PDF failure shows a
+  /// message instead of crashing.
+  Future<void> _exportReport(_DetailData data, double balance) async {
+    final p = context.read<AppProvider>();
+    final range = await pickDateRange(context, p.t);
+    if (range == null || !mounted) return;
+    final txns = data.transactions
+        .where((t) => inDateRange(t.dateTime, range.start, range.end))
+        .toList();
+    var startBalance = data.party.openingBalance;
+    if (range.start != null) {
+      for (final t in data.transactions) {
+        if (t.dateTime.isBefore(range.start!)) {
+          startBalance += t.type == 'udhaar' ? t.amount : -t.amount;
+        }
+      }
+    }
+    final rangeNet = txns.fold<double>(
+        0, (sum, t) => sum + (t.type == 'udhaar' ? t.amount : -t.amount));
+    try {
+      final biz = await _currentBusiness();
+      await shareLedgerPdf(
+        business: biz,
+        party: data.party,
+        transactions: txns,
+        balance: startBalance + rangeNet,
+        startBalance: startBalance,
+        periodLabel: range.start == null ? null : range.label,
+      );
+    } catch (_) {
+      if (mounted) showSnack(context, p.t('pdfError'));
+    }
+  }
 
   Future<Business> _currentBusiness() async {
     final bizId = context.read<AppProvider>().businessId;
@@ -346,13 +384,7 @@ class _PartyDetailScreenState extends State<PartyDetailScreen> {
                   if (v == 'switch') _switchType(party);
                   if (v == 'card') _shareBusinessCard();
                   if (v == 'report' && snap.data != null) {
-                    final data = snap.data!;
-                    _currentBusiness().then((biz) => shareLedgerPdf(
-                          business: biz,
-                          party: data.party,
-                          transactions: data.transactions,
-                          balance: data.balance,
-                        ));
+                    _exportReport(snap.data!, snap.data!.balance);
                   }
                   if (v == 'delete') _deleteParty();
                 },
@@ -391,6 +423,9 @@ class _PartyDetailScreenState extends State<PartyDetailScreen> {
           final party = data.party;
           final balance = data.balance;
           final running = _runningBalances(data);
+          final visible = data.transactions
+              .where((t) => inDateRange(t.dateTime, _viewStart, _viewEnd))
+              .toList();
           var totalGave =
               party.openingBalance > 0 ? party.openingBalance : 0.0;
           var totalGot = party.openingBalance < 0 ? -party.openingBalance : 0.0;
@@ -475,15 +510,7 @@ class _PartyDetailScreenState extends State<PartyDetailScreen> {
                 child: Row(
                   children: [
                     _actionButton(Icons.picture_as_pdf, p.t('reportLabel'),
-                        () async {
-                      final biz = await _currentBusiness();
-                      await shareLedgerPdf(
-                        business: biz,
-                        party: party,
-                        transactions: data.transactions,
-                        balance: balance,
-                      );
-                    }),
+                        () => _exportReport(data, balance)),
                     _actionButton(Icons.calendar_month, p.t('setDate'),
                         () => _setDate(party)),
                     _actionButton(Icons.chat_bubble, p.t('whatsappReminder'),
@@ -527,6 +554,38 @@ class _PartyDetailScreenState extends State<PartyDetailScreen> {
                 ),
               ),
               const Divider(height: 1),
+              if (data.transactions.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+                  child: Row(
+                    children: [
+                      ActionChip(
+                        avatar: const Icon(Icons.calendar_month, size: 16),
+                        label: Text(_viewLabel ?? p.t('dateRange')),
+                        onPressed: () async {
+                          final range = await pickDateRange(context, p.t);
+                          if (range == null || !mounted) return;
+                          setState(() {
+                            _viewStart = range.start;
+                            _viewEnd = range.end;
+                            _viewLabel =
+                                range.start == null ? null : range.label;
+                          });
+                        },
+                      ),
+                      if (_viewLabel != null)
+                        IconButton(
+                          icon: const Icon(Icons.close, size: 18),
+                          tooltip: p.t('rangeAll'),
+                          onPressed: () => setState(() {
+                            _viewStart = null;
+                            _viewEnd = null;
+                            _viewLabel = null;
+                          }),
+                        ),
+                    ],
+                  ),
+                ),
               if (data.transactions.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 8, 12, 2),
@@ -575,12 +634,15 @@ class _PartyDetailScreenState extends State<PartyDetailScreen> {
                           ],
                         ),
                       )
-                    : ListView.separated(
-                        itemCount: data.transactions.length,
-                        separatorBuilder: (_, __) => const Divider(height: 1),
-                        itemBuilder: (context, i) =>
-                            _entryRow(p, party, data.transactions[i], running),
-                      ),
+                    : visible.isEmpty
+                        ? Center(child: Text(p.t('noData')))
+                        : ListView.separated(
+                            itemCount: visible.length,
+                            separatorBuilder: (_, __) =>
+                                const Divider(height: 1),
+                            itemBuilder: (context, i) =>
+                                _entryRow(p, party, visible[i], running),
+                          ),
               ),
             ],
           );
