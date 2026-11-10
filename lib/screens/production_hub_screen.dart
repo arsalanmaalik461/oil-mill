@@ -108,7 +108,11 @@ class _ProductionHubScreenState extends State<ProductionHubScreen> {
     }
     var otherExp = 0.0;
     for (final e in await db.getExpenses(bizId)) {
-      if (_isToday(e.dateTime)) otherExp += e.amount;
+      // Operating expenses only (Phase 4): owner withdrawals, loan
+      // repayments and transfers do not reduce net profit.
+      if (_isToday(e.dateTime) && e.kind == 'operating') {
+        otherExp += e.amount;
+      }
     }
 
     // --- Today's production output (completed batches only) ---

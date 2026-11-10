@@ -31,6 +31,10 @@ class _ReportData {
   final double sales;
   final double cogs;
   final double otherExpenses;
+
+  /// Owner withdrawals + loan repayments + transfers of the period:
+  /// real money out, but NOT operating expenses (Phase 4).
+  final double nonOpExpenses;
   final double prodExpensesInfo;
   final double rawStockValue;
   final double finishedStockValue;
@@ -42,6 +46,7 @@ class _ReportData {
     required this.sales,
     required this.cogs,
     required this.otherExpenses,
+    required this.nonOpExpenses,
     required this.prodExpensesInfo,
     required this.rawStockValue,
     required this.finishedStockValue,
@@ -185,9 +190,17 @@ class _ProductionReportsScreenState extends State<ProductionReportsScreen> {
     }
 
     // ---- Expense Book expenses of the period ----
+    // Only OPERATING expenses reduce net profit (Phase 4): owner
+    // withdrawals, loan repayments and transfers are tracked apart.
     var otherExpenses = 0.0;
+    var nonOpExpenses = 0.0;
     for (final e in await db.getExpenses(bizId)) {
-      if (_inPeriod(e.dateTime)) otherExpenses += e.amount;
+      if (!_inPeriod(e.dateTime)) continue;
+      if (e.kind == 'operating') {
+        otherExpenses += e.amount;
+      } else {
+        nonOpExpenses += e.amount;
+      }
     }
 
     // ---- Production expenses of the period (information only) ----
@@ -257,6 +270,7 @@ class _ProductionReportsScreenState extends State<ProductionReportsScreen> {
       sales: sales,
       cogs: cogs,
       otherExpenses: otherExpenses,
+      nonOpExpenses: nonOpExpenses,
       prodExpensesInfo: prodExpensesInfo,
       rawStockValue: rawValue,
       finishedStockValue: finishedValue,
@@ -356,6 +370,7 @@ class _ProductionReportsScreenState extends State<ProductionReportsScreen> {
                       sales: 0,
                       cogs: 0,
                       otherExpenses: 0,
+                      nonOpExpenses: 0,
                       prodExpensesInfo: 0,
                       rawStockValue: 0,
                       finishedStockValue: 0,
@@ -413,6 +428,13 @@ class _ProductionReportsScreenState extends State<ProductionReportsScreen> {
                           Icons.factory,
                           AppColors.accent,
                         ),
+                        if (d.nonOpExpenses > 0)
+                          _statCard(
+                            p.t('nonOpExpenses'),
+                            formatRs(d.nonOpExpenses),
+                            Icons.swap_horiz,
+                            AppColors.textGrey,
+                          ),
                         _statCard(
                           '${p.t('rawMaterial')} • ${p.t('stockValue')}',
                           formatRs(d.rawStockValue),

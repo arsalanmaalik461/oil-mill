@@ -88,6 +88,7 @@ class _ExpenseBookScreenState extends State<ExpenseBookScreen> {
                 : existing.amount.toString()));
     final noteCtrl = TextEditingController(text: existing?.note ?? '');
     var account = existing?.account ?? 'cash';
+    var kind = existing?.kind ?? 'operating';
     var when = existing?.dateTime ?? DateTime.now();
     final ok = await showDialog<bool>(
       context: context,
@@ -144,6 +145,24 @@ class _ExpenseBookScreenState extends State<ExpenseBookScreen> {
                     if (v != null) setLocal(() => account = v);
                   },
                 ),
+                const SizedBox(height: 10),
+                DropdownButtonFormField<String>(
+                  initialValue: kind,
+                  decoration: InputDecoration(labelText: p.t('expKind')),
+                  items: [
+                    DropdownMenuItem(
+                        value: 'operating', child: Text(p.t('kindOperating'))),
+                    DropdownMenuItem(
+                        value: 'owner', child: Text(p.t('kindOwner'))),
+                    DropdownMenuItem(
+                        value: 'loan', child: Text(p.t('kindLoan'))),
+                    DropdownMenuItem(
+                        value: 'transfer', child: Text(p.t('kindTransfer'))),
+                  ],
+                  onChanged: (v) {
+                    if (v != null) setLocal(() => kind = v);
+                  },
+                ),
                 const SizedBox(height: 6),
                 ListTile(
                   contentPadding: EdgeInsets.zero,
@@ -191,6 +210,7 @@ class _ExpenseBookScreenState extends State<ExpenseBookScreen> {
       amount: amount,
       note: note,
       account: account,
+      kind: kind,
       dateTime: when,
     );
     if (existing == null) {
