@@ -264,26 +264,12 @@ class _QrPaymentScreenState extends State<QrPaymentScreen> {
   /// confirmation is actual money received, like a paid bill.)
   Future<void> _confirm(AppProvider p, QrPayment q) async {
     if (q.id == null) return;
-    await _db.updateQrPaymentStatus(q.id!, 'confirmed');
-    if (q.partyId != null) {
-      await _db.insertPartyTransaction(PartyTransaction(
-        partyId: q.partyId!,
-        type: 'wasool',
-        amount: q.amount,
-        note: 'QR payment',
-        dateTime: q.dateTime,
-      ));
-    }
-    await _db.insertCashEntry(CashEntry(
-      businessId: q.businessId,
-      type: 'in',
-      amount: q.amount,
-      note: 'QR payment${q.payerName.isNotEmpty ? ' — ${q.payerName}' : ''}',
-      partyId: q.partyId,
-      dateTime: q.dateTime,
-    ));
+    // One transactional, idempotent confirm in the database layer:
+    // wasool carries the real method, and only true cash receipts post
+    // a drawer entry (JazzCash/Easypaisa/bank no longer inflate cash).
+    final done = await _db.confirmQrPayment(q);
     if (!mounted) return;
-    showSnack(context, p.t('paymentConfirmed'));
+    if (done) showSnack(context, p.t('paymentConfirmed'));
     _reload();
     context.read<AppProvider>().bump();
   }

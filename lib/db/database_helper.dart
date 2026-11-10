@@ -821,6 +821,48 @@ class DatabaseHelper {
     return rows.map(QrPayment.fromMap).toList();
   }
 
+  /// Confirms a QR payment EXACTLY ONCE, in a single transaction:
+  /// flips the status, posts the party wasool (tagged with the real
+  /// payment method), and posts the drawer entry ONLY when the money
+  /// actually arrived as cash — a JazzCash/Easypaisa/bank receipt is
+  /// not physical cash (audit Phase 1). Returns false when the payment
+  /// was already confirmed, so a double tap can never double-post.
+  Future<bool> confirmQrPayment(QrPayment q) async {
+    final d = await db;
+    return d.transaction((txn) async {
+      final rows = await txn.query('qr_payments',
+          columns: ['status'], where: 'id = ?', whereArgs: [q.id]);
+      if (rows.isEmpty || rows.first['status'] == 'confirmed') return false;
+      await txn.update('qr_payments', {'status': 'confirmed'},
+          where: 'id = ?', whereArgs: [q.id]);
+      if (q.partyId != null) {
+        await txn.insert(
+            'party_transactions',
+            PartyTransaction(
+              partyId: q.partyId!,
+              type: 'wasool',
+              amount: q.amount,
+              note: 'QR payment',
+              dateTime: q.dateTime,
+              method: q.method,
+            ).toMap());
+      }
+      if (q.method == 'cash') {
+        await _postLinkedCash(txn,
+            businessId: q.businessId,
+            type: 'in',
+            amount: q.amount,
+            note:
+                'QR payment${q.payerName.isNotEmpty ? ' — ${q.payerName}' : ''}',
+            partyId: q.partyId,
+            dateTime: q.dateTime,
+            sourceTable: 'qr_payments',
+            sourceId: q.id!);
+      }
+      return true;
+    });
+  }
+
   Future<void> updateQrPaymentStatus(int id, String status) async =>
       (await db).update('qr_payments', {'status': status},
           where: 'id = ?', whereArgs: [id]);
