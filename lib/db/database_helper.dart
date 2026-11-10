@@ -1413,7 +1413,6 @@ class DatabaseHelper {
         double unknownCostSales,
         int unknownCostLines
       })> getProfitSummary(int businessId, DateTime start, DateTime end) async {
-    final d = await db;
     bool inPeriod(DateTime t) => !t.isBefore(start) && t.isBefore(end);
 
     var sales = 0.0, cogs = 0.0, unknownSales = 0.0;

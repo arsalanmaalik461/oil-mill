@@ -372,7 +372,6 @@ class _PurchaseFormScreenState extends State<_PurchaseFormScreen> {
       showSnack(context, p.t('invalidAmount'));
       return;
     }
-    final total = qty * rate;
     final db = DatabaseHelper.instance;
     final bizId = p.businessId;
     final supplierId = _supplier?.id;
