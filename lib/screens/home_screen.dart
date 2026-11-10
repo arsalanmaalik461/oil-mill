@@ -251,13 +251,18 @@ class _HomeScreenState extends State<HomeScreen> {
       );
       return;
     }
-    await shareReportPdf(
+    // Business-wide Account Statement in the original app's format,
+    // covering the parties of the current tab.
+    final db = DatabaseHelper.instance;
+    final parties = data.parties.map((r) => r.party).toList();
+    final byParty = <int, List<PartyTransaction>>{};
+    for (final party in parties) {
+      byParty[party.id!] = await db.getPartyTransactions(party.id!);
+    }
+    await shareStatementPdf(
       business: data.business,
-      title: p.t('partyReport'),
-      headers: [p.t('name'), p.t('phone'), p.t('balance')],
-      rows: data.parties
-          .map((r) => [r.party.name, r.party.phone, formatRs(r.balance)])
-          .toList(),
+      parties: parties,
+      transactionsByParty: byParty,
     );
   }
 

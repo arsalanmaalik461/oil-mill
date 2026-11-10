@@ -19,7 +19,7 @@ pw.Widget _header(Business business, String title) {
       if (business.phone.isNotEmpty) pw.Text('Phone: ${business.phone}'),
       if (business.address.isNotEmpty) pw.Text('Address: ${business.address}'),
       pw.SizedBox(height: 6),
-      pw.Text(title, style: pw.TextStyle(fontSize: 15, fontWeight: pw.FontWeight.bold)),
+      pw.Text(title, style: const pw.TextStyle(fontSize: 15, fontWeight: pw.FontWeight.bold)),
       pw.Divider(color: PdfColor.fromHex('#EE4023')),
     ],
   );
@@ -31,6 +31,94 @@ pw.Widget _footer() => pw.Padding(
           style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey)),
     );
 
+final _numFmt = NumberFormat('#,##0.##');
+final _stmtDate = DateFormat('dd MMM yy');
+
+String _num(double v) => _numFmt.format(v);
+
+/// Balance the way the original app prints it: "Rs 38,000 dr".
+String _balText(double b) =>
+    b < 0 ? 'Rs ${_num(-b)} cr' : 'Rs ${_num(b)} dr';
+
+String _rangeText(DateTime from, DateTime to) =>
+    '(${_stmtDate.format(from)} - ${_stmtDate.format(to)})';
+
+/// Statement header + totals block shared by the party ledger and the
+/// business-wide statement, copied from the original app's exports:
+/// business name top-left, centred title, then Total Debit / Total
+/// Credit / Net Balance and the entry count.
+List<pw.Widget> _statementHead(
+  Business business, {
+  required String subtitle,
+  required String range,
+  required double totalDebit,
+  required double totalCredit,
+  required int entryCount,
+}) {
+  pw.Widget totalCell(String label, String value) => pw.Expanded(
+        child: pw.Column(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            pw.Text(label, style: const pw.TextStyle(fontSize: 10)),
+            pw.SizedBox(height: 2),
+            pw.Text('Rs $value',
+                style: const pw.TextStyle(
+                    fontSize: 12.5, fontWeight: pw.FontWeight.bold)),
+          ],
+        ),
+      );
+  return [
+    pw.Text(business.name,
+        style: const pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
+    if (business.phone.isNotEmpty) pw.Text(business.phone),
+    pw.SizedBox(height: 10),
+    pw.Center(
+      child: pw.Column(
+        children: [
+          pw.Text('Account Statement',
+              style:
+                  const pw.TextStyle(fontSize: 17, fontWeight: pw.FontWeight.bold)),
+          pw.SizedBox(height: 3),
+          pw.Text(subtitle, style: const pw.TextStyle(fontSize: 12)),
+          pw.Text(range,
+              style: const pw.TextStyle(fontSize: 11, color: PdfColors.grey)),
+        ],
+      ),
+    ),
+    pw.SizedBox(height: 14),
+    pw.Row(children: [
+      totalCell('Total Debit(-)', _num(totalDebit)),
+      totalCell('Total Credit(+)', _num(totalCredit)),
+      totalCell('Net Balance', _balText(totalDebit - totalCredit)),
+    ]),
+    pw.SizedBox(height: 12),
+    pw.Text('No. of Entries: $entryCount (Date Range)',
+        style: const pw.TextStyle(fontSize: 11)),
+    pw.SizedBox(height: 8),
+  ];
+}
+
+pw.Table _statementTable({
+  required List<String> headers,
+  required List<List<String>> rows,
+  required List<pw.Alignment> alignments,
+}) {
+  return pw.TableHelper.fromTextArray(
+    headers: headers,
+    data: rows,
+    headerStyle: const pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 9.5),
+    headerDecoration: const pw.BoxDecoration(color: PdfColors.grey200),
+    cellStyle: const pw.TextStyle(fontSize: 9),
+    cellAlignments: {
+      for (var i = 0; i < alignments.length; i++) i: alignments[i],
+    },
+    border: pw.TableBorder.all(color: PdfColors.grey300, width: 0.5),
+  );
+}
+
+/// One party's ledger as an "Account Statement" — the original app's
+/// format: totals on top, then # | Date | Details | Debit | Credit |
+/// Balance with a running balance in "Rs X dr/cr" form.
 Future<void> shareLedgerPdf({
   required Business business,
   required Party party,
@@ -38,49 +126,145 @@ Future<void> shareLedgerPdf({
   required double balance,
 }) async {
   final doc = pw.Document();
-  double running = party.openingBalance;
-  final rows = <List<String>>[];
-  // Ascending chronological order with an id tiebreak (Dart's sort is not
-  // stable): bill-created udhaar/wasool pairs share one timestamp, and the
-  // running balance is only correct if udhaar is applied first, matching
-  // the on-screen ledger in party_detail_screen.
   final sorted = [...transactions]..sort((a, b) {
       final c = a.dateTime.compareTo(b.dateTime);
       return c != 0 ? c : (a.id ?? 0).compareTo(b.id ?? 0);
     });
-  for (final t in sorted) {
-    running += t.type == 'udhaar' ? t.amount : -t.amount;
+  var totalDebit = 0.0;
+  var totalCredit = 0.0;
+  var running = party.openingBalance;
+  final rows = <List<String>>[];
+  var n = 0;
+  if (party.openingBalance != 0) {
     rows.add([
-      _df.format(t.dateTime),
-      t.type == 'udhaar' ? 'You Gave' : 'You Got',
-      t.note,
-      formatRs(t.amount),
-      formatRs(running),
+      '',
+      '',
+      'Opening Balance',
+      party.openingBalance > 0 ? _num(party.openingBalance) : '',
+      party.openingBalance < 0 ? _num(-party.openingBalance) : '',
+      _balText(running),
     ]);
   }
+  for (final t in sorted) {
+    n++;
+    if (t.type == 'udhaar') {
+      totalDebit += t.amount;
+    } else {
+      totalCredit += t.amount;
+    }
+    running += t.type == 'udhaar' ? t.amount : -t.amount;
+    rows.add([
+      '$n',
+      _stmtDate.format(t.dateTime),
+      t.note.isNotEmpty ? t.note : (t.type == 'udhaar' ? 'You Gave' : 'You Got'),
+      t.type == 'udhaar' ? _num(t.amount) : '',
+      t.type == 'wasool' ? _num(t.amount) : '',
+      _balText(running),
+    ]);
+  }
+  final from = sorted.isNotEmpty ? sorted.first.dateTime : DateTime.now();
+  final to = sorted.isNotEmpty ? sorted.last.dateTime : DateTime.now();
   doc.addPage(pw.MultiPage(
     pageFormat: PdfPageFormat.a4,
     build: (c) => [
-      _header(business, 'Ledger — ${party.name}'),
-      pw.Text('Phone: ${party.phone}'),
-      pw.Text('Opening Balance: ${formatRs(party.openingBalance)}'),
-      pw.SizedBox(height: 10),
-      pw.TableHelper.fromTextArray(
-        headers: ['Date', 'Type', 'Note', 'Amount', 'Balance'],
-        data: rows,
-        headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.white),
-        headerDecoration: pw.BoxDecoration(color: PdfColor.fromHex('#EE4023')),
-        cellStyle: const pw.TextStyle(fontSize: 9),
+      ..._statementHead(
+        business,
+        subtitle: party.name,
+        range: _rangeText(from, to),
+        totalDebit: totalDebit,
+        totalCredit: totalCredit,
+        entryCount: n,
       ),
-      pw.SizedBox(height: 10),
-      pw.Text(
-        balance >= 0 ? 'You will get: ${formatRs(balance)}' : 'You will give: ${formatRs(-balance)}',
-        style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold),
+      _statementTable(
+        headers: ['#', 'Date', 'Details', 'Debit(-)', 'Credit(+)', 'Balance'],
+        rows: rows,
+        alignments: const [
+          pw.Alignment.center,
+          pw.Alignment.centerLeft,
+          pw.Alignment.centerLeft,
+          pw.Alignment.centerRight,
+          pw.Alignment.centerRight,
+          pw.Alignment.centerRight,
+        ],
       ),
       _footer(),
     ],
   ));
-  await Printing.sharePdf(bytes: await doc.save(), filename: 'ledger_${party.name}.pdf');
+  await Printing.sharePdf(
+      bytes: await doc.save(), filename: 'ledger_${party.name}.pdf');
+}
+
+/// Business-wide "Account Statement" across many parties — the same
+/// format the original app exports, with a Name column and one running
+/// balance for the whole business.
+Future<void> shareStatementPdf({
+  required Business business,
+  required List<Party> parties,
+  required Map<int, List<PartyTransaction>> transactionsByParty,
+}) async {
+  final doc = pw.Document();
+  final names = {for (final party in parties) party.id: party.name};
+  final all = <PartyTransaction>[
+    for (final party in parties)
+      ...(transactionsByParty[party.id] ?? const <PartyTransaction>[]),
+  ]..sort((a, b) {
+      final c = a.dateTime.compareTo(b.dateTime);
+      return c != 0 ? c : (a.id ?? 0).compareTo(b.id ?? 0);
+    });
+  var totalDebit = 0.0;
+  var totalCredit = 0.0;
+  var running = 0.0;
+  final rows = <List<String>>[];
+  var n = 0;
+  for (final t in all) {
+    n++;
+    if (t.type == 'udhaar') {
+      totalDebit += t.amount;
+    } else {
+      totalCredit += t.amount;
+    }
+    running += t.type == 'udhaar' ? t.amount : -t.amount;
+    rows.add([
+      '$n',
+      _stmtDate.format(t.dateTime),
+      names[t.partyId] ?? '',
+      t.note.isNotEmpty ? t.note : (t.type == 'udhaar' ? 'You Gave' : 'You Got'),
+      t.type == 'udhaar' ? _num(t.amount) : '',
+      t.type == 'wasool' ? _num(t.amount) : '',
+      _balText(running),
+    ]);
+  }
+  final from = all.isNotEmpty ? all.first.dateTime : DateTime.now();
+  final to = all.isNotEmpty ? all.last.dateTime : DateTime.now();
+  doc.addPage(pw.MultiPage(
+    pageFormat: PdfPageFormat.a4,
+    build: (c) => [
+      ..._statementHead(
+        business,
+        subtitle: business.name,
+        range: _rangeText(from, to),
+        totalDebit: totalDebit,
+        totalCredit: totalCredit,
+        entryCount: n,
+      ),
+      _statementTable(
+        headers: ['#', 'Date', 'Name', 'Details', 'Debit(-)', 'Credit(+)', 'Balance'],
+        rows: rows,
+        alignments: const [
+          pw.Alignment.center,
+          pw.Alignment.centerLeft,
+          pw.Alignment.centerLeft,
+          pw.Alignment.centerLeft,
+          pw.Alignment.centerRight,
+          pw.Alignment.centerRight,
+          pw.Alignment.centerRight,
+        ],
+      ),
+      _footer(),
+    ],
+  ));
+  await Printing.sharePdf(
+      bytes: await doc.save(), filename: 'account_statement.pdf');
 }
 
 Future<void> shareBillPdf({
@@ -104,7 +288,7 @@ Future<void> shareBillPdf({
           data: items
               .map((i) => [i.name, formatQty(i.qty), formatRs(i.rate), formatRs(i.amount)])
               .toList(),
-          headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.white),
+          headerStyle: const pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.white),
           headerDecoration: pw.BoxDecoration(color: PdfColor.fromHex('#EE4023')),
           cellStyle: const pw.TextStyle(fontSize: 10),
         ),
@@ -112,7 +296,7 @@ Future<void> shareBillPdf({
         pw.Align(
           alignment: pw.Alignment.centerRight,
           child: pw.Text('TOTAL: ${formatRs(bill.total)}',
-              style: pw.TextStyle(fontSize: 15, fontWeight: pw.FontWeight.bold)),
+              style: const pw.TextStyle(fontSize: 15, fontWeight: pw.FontWeight.bold)),
         ),
         pw.Spacer(),
         pw.Text('Thank you for your business!',
@@ -140,13 +324,13 @@ Future<void> shareReportPdf({
       pw.TableHelper.fromTextArray(
         headers: headers,
         data: rows,
-        headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.white),
+        headerStyle: const pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.white),
         headerDecoration: pw.BoxDecoration(color: PdfColor.fromHex('#EE4023')),
         cellStyle: const pw.TextStyle(fontSize: 9),
       ),
       if (summaryLine != null) ...[
         pw.SizedBox(height: 10),
-        pw.Text(summaryLine, style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold)),
+        pw.Text(summaryLine, style: const pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold)),
       ],
       _footer(),
     ],
