@@ -440,9 +440,37 @@ extension FirebaseUsers on FirebaseService {
   // ---------- Per-user full data sync ----------
   /// Uploads ALL data of [businessId] to Firestore under this user's own
   /// area: app_users/{username}/tables/{table} — other users never see it.
+  /// How many data rows this user's cloud backup currently holds
+  /// (0 = no backup yet).
+  Future<int> cloudRowCount(String username) async {
+    if (!isConfigured) return 0;
+    final snap = await _users.doc(username).collection('tables').get();
+    var count = 0;
+    for (final doc in snap.docs) {
+      count += ((doc.data()['rows'] as List?) ?? const []).length;
+    }
+    return count;
+  }
+
   Future<int> syncUserData(String username, int businessId) async {
     if (!isConfigured) throw StateError('firebase-not-configured');
     final data = await DatabaseHelper.instance.exportBusinessData(businessId);
+    // Safety: an EMPTY local business must never wipe a cloud backup
+    // that still holds data (e.g. signing in on a fresh phone before
+    // the restore runs). Skip the upload in that case.
+    var localRows = 0;
+    for (final e in data.entries) {
+      if (e.key == 'app' || e.key == 'version') continue;
+      localRows += (e.value as List).length;
+    }
+    if (localRows == 0) {
+      try {
+        final cloud = await cloudRowCount(username);
+        if (cloud > 0) return cloud;
+      } catch (_) {
+        return 0; // cannot verify the cloud copy — write nothing
+      }
+    }
     final root = _users.doc(username).collection('tables');
     var count = 0;
     for (final entry in data.entries) {
