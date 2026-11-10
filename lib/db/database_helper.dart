@@ -1314,6 +1314,210 @@ class DatabaseHelper {
     );
   }
 
+  // ---------------- Profit & batch profitability (Phase 5) ----------------
+  /// Total salaries + advances paid to the business's staff in a
+  /// period. Salaries are operating costs (Phase 4 classification);
+  /// until Phase 5 they were invisible to every profit figure.
+  Future<double> getSalaryTotal(int businessId,
+      {DateTime? start, DateTime? end}) async {
+    final d = await db;
+    var where = 's.business_id = ?';
+    final args = <Object?>[businessId];
+    if (start != null) {
+      where += ' AND sp.date_time >= ?';
+      args.add(start.toIso8601String());
+    }
+    if (end != null) {
+      where += ' AND sp.date_time < ?';
+      args.add(end.toIso8601String());
+    }
+    final r = await d.rawQuery(
+        'SELECT COALESCE(SUM(sp.amount),0) AS s FROM salary_payments sp '
+        'JOIN staff s ON s.id = sp.staff_id WHERE $where',
+        args);
+    return (r.first['s'] as num).toDouble();
+  }
+
+  /// THE profit calculation of the app (Phase 5) — one implementation
+  /// used by Production Reports, general Reports and the Owner
+  /// Dashboard so every screen agrees:
+  ///   Sales  = non-deleted bill totals of the period
+  ///   COGS   = sale-time cost snapshots (legacy lines: current cost)
+  ///   Gross  = Sales - COGS
+  ///   Net    = Gross - operating expenses - salaries paid
+  /// Owner withdrawals / loan repayments / transfers are reported as
+  /// [nonOperating] and never touch Net. Free-text bill lines have no
+  /// cost: their sales are counted in [unknownCostSales] so the user
+  /// can see how much of Sales carries no COGS.
+  Future<
+      ({
+        double sales,
+        double cogs,
+        double gross,
+        double operatingExpenses,
+        double salaries,
+        double nonOperating,
+        double net,
+        double unknownCostSales,
+        int unknownCostLines
+      })> getProfitSummary(int businessId, DateTime start, DateTime end) async {
+    final d = await db;
+    bool inPeriod(DateTime t) => !t.isBefore(start) && t.isBefore(end);
+
+    var sales = 0.0, cogs = 0.0, unknownSales = 0.0;
+    var unknownLines = 0;
+    final costCache = <int, double>{};
+    final bills = await getBills(businessId);
+    for (final b in bills) {
+      if (!inPeriod(b.dateTime) || b.id == null) continue;
+      sales += b.total;
+      for (final bi in await getBillItems(b.id!)) {
+        if (bi.costAmount != null) {
+          cogs += bi.costAmount!;
+        } else if (bi.itemId != null) {
+          final c = costCache[bi.itemId!] ??=
+              await getItemUnitCost(bi.itemId!);
+          cogs += bi.qty * c;
+        } else {
+          unknownLines++;
+          unknownSales += bi.amount;
+        }
+      }
+    }
+    var opEx = 0.0, nonOp = 0.0;
+    for (final e in await getExpenses(businessId)) {
+      if (!inPeriod(e.dateTime)) continue;
+      if (e.kind == 'operating') {
+        opEx += e.amount;
+      } else {
+        nonOp += e.amount;
+      }
+    }
+    final salaries = await getSalaryTotal(businessId, start: start, end: end);
+    final gross = sales - cogs;
+    return (
+      sales: sales,
+      cogs: cogs,
+      gross: gross,
+      operatingExpenses: opEx,
+      salaries: salaries,
+      nonOperating: nonOp,
+      net: gross - opEx - salaries,
+      unknownCostSales: unknownSales,
+      unknownCostLines: unknownLines
+    );
+  }
+
+  /// Batch-wise profitability (Phase 5), computed by a FIFO replay of
+  /// the stock book: every stock-IN opens a lot (production lots are
+  /// recognised by their 'Production batch #N' note and carry the
+  /// batch's allocated unit cost); bill stock-OUTs consume lots
+  /// oldest-first, attributing revenue (qty x sale rate) and COGS
+  /// (qty x lot cost) to the batch that supplied them. Other outs
+  /// (production consumption, purchase returns, cancellations) consume
+  /// lots without revenue. Cumulative, all-time figures.
+  Future<
+      List<
+          ({
+            int batchId,
+            int batchNo,
+            double producedQty,
+            double soldQty,
+            double revenue,
+            double cogs,
+            double profit,
+            double unsoldQty
+          })>> getBatchProfits(int businessId) async {
+    final d = await db;
+    final batches = await getProductionBatches(businessId);
+    final byNo = <int, ProductionBatch>{
+      for (final b in batches) b.batchNo: b,
+    };
+    final rows = await d.rawQuery(
+        'SELECT st.* FROM stock_transactions st '
+        'JOIN items i ON i.id = st.item_id '
+        'WHERE i.business_id = ? '
+        'ORDER BY st.date_time ASC, st.id ASC',
+        [businessId]);
+    final lotsByItem = <int, List<({int? batchId, double qty, double cost})>>{};
+    final agg = <int, ({double produced, double sold, double revenue, double cogs})>{};
+    final batchNoRe = RegExp(r'Production batch #(\d+)');
+    for (final r in rows) {
+      final itemId = (r['item_id'] as num).toInt();
+      final qty = (r['qty'] as num).toDouble();
+      final rate = (r['rate'] as num).toDouble();
+      final note = r['note'] as String? ?? '';
+      final lots = lotsByItem.putIfAbsent(itemId, () => []);
+      if (r['type'] == 'in') {
+        final m = batchNoRe.firstMatch(note);
+        final b = m == null ? null : byNo[int.tryParse(m.group(1)!) ?? -1];
+        lots.add((batchId: b?.id, qty: qty, cost: rate));
+        if (b?.id != null) {
+          final a = agg[b!.id!] ?? (produced: 0.0, sold: 0.0, revenue: 0.0, cogs: 0.0);
+          agg[b.id!] = (
+            produced: a.produced + qty,
+            sold: a.sold,
+            revenue: a.revenue,
+            cogs: a.cogs
+          );
+        }
+      } else {
+        final isBillSale = r['bill_id'] != null || note.startsWith('Bill #');
+        var remaining = qty;
+        while (remaining > 1e-9 && lots.isNotEmpty) {
+          final lot = lots.first;
+          final take = remaining < lot.qty ? remaining : lot.qty;
+          if (isBillSale && lot.batchId != null) {
+            final a = agg[lot.batchId!] ??
+                (produced: 0.0, sold: 0.0, revenue: 0.0, cogs: 0.0);
+            agg[lot.batchId!] = (
+              produced: a.produced,
+              sold: a.sold + take,
+              revenue: a.revenue + take * rate,
+              cogs: a.cogs + take * lot.cost
+            );
+          }
+          remaining -= take;
+          if (take >= lot.qty - 1e-9) {
+            lots.removeAt(0);
+          } else {
+            lots[0] = (
+              batchId: lot.batchId,
+              qty: lot.qty - take,
+              cost: lot.cost
+            );
+          }
+        }
+      }
+    }
+    final result = <({
+      int batchId,
+      int batchNo,
+      double producedQty,
+      double soldQty,
+      double revenue,
+      double cogs,
+      double profit,
+      double unsoldQty
+    })>[];
+    for (final b in batches) {
+      final a = agg[b.id];
+      if (a == null) continue;
+      result.add((
+        batchId: b.id!,
+        batchNo: b.batchNo,
+        producedQty: a.produced,
+        soldQty: a.sold,
+        revenue: a.revenue,
+        cogs: a.cogs,
+        profit: a.revenue - a.cogs,
+        unsoldQty: a.produced - a.sold
+      ));
+    }
+    result.sort((x, y) => y.batchNo.compareTo(x.batchNo));
+    return result;
+  }
+
   // ---------------- Production & Manufacturing ----------------
   /// Weighted-average purchase cost of an item: total value of all
   /// stock-IN transactions divided by their total quantity. Falls back to

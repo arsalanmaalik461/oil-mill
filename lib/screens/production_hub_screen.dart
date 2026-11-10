@@ -107,6 +107,11 @@ class _ProductionHubScreenState extends State<ProductionHubScreen> {
       if (_isToday(e.dateTime)) prodExp += e.amount;
     }
     var otherExp = 0.0;
+    // Salaries paid today are an operating cost too (Phase 5).
+    final now = DateTime.now();
+    otherExp += await db.getSalaryTotal(bizId,
+        start: DateTime(now.year, now.month, now.day),
+        end: DateTime(now.year, now.month, now.day + 1));
     for (final e in await db.getExpenses(bizId)) {
       // Operating expenses only (Phase 4): owner withdrawals, loan
       // repayments and transfers do not reduce net profit.

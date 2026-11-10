@@ -17,6 +17,10 @@ class _ReportData {
   final double todaySales;
   final double monthSales;
   final double monthExpenses;
+
+  /// Real monthly net profit (Phase 5): sales - COGS - operating
+  /// expenses - salaries, from DatabaseHelper.getProfitSummary.
+  final double monthProfit;
   final double willGet;
   final double willGive;
   final int lowStockCount;
@@ -36,6 +40,7 @@ class _ReportData {
     required this.todaySales,
     required this.monthSales,
     required this.monthExpenses,
+    required this.monthProfit,
     required this.willGet,
     required this.willGive,
     required this.lowStockCount,
@@ -155,6 +160,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
     final monthSales = await db.getTotalSales(bizId, month: now);
     final monthExpenses = await db.getExpenseTotal(bizId, month: now);
+    final monthSummary = await db.getProfitSummary(
+        bizId, DateTime(now.year, now.month), DateTime(now.year, now.month + 1));
     final cashBalance = await db.getCashBalance(bizId);
     final totals = await db.getPartyTotals(bizId);
 
@@ -193,6 +200,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
       todaySales: todaySales,
       monthSales: monthSales,
       monthExpenses: monthExpenses,
+      monthProfit: monthSummary.net,
       willGet: totals.willGet,
       willGive: totals.willGive,
       lowStockCount: lowCount,
@@ -357,7 +365,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
             return Center(child: Text(p.t('noData')));
           }
           final d = snap.data!;
-          final monthNet = d.monthSales - d.monthExpenses;
+          final monthNet = d.monthProfit;
           return ListView(
             padding: const EdgeInsets.fromLTRB(12, 4, 12, 20),
             children: [

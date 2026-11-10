@@ -35,6 +35,10 @@ class _ReportData {
   /// Owner withdrawals + loan repayments + transfers of the period:
   /// real money out, but NOT operating expenses (Phase 4).
   final double nonOpExpenses;
+
+  /// Salaries + advances paid in the period (Phase 5): an operating
+  /// cost that used to be invisible to profit.
+  final double salaries;
   final double prodExpensesInfo;
   final double rawStockValue;
   final double finishedStockValue;
@@ -47,6 +51,7 @@ class _ReportData {
     required this.cogs,
     required this.otherExpenses,
     required this.nonOpExpenses,
+    required this.salaries,
     required this.prodExpensesInfo,
     required this.rawStockValue,
     required this.finishedStockValue,
@@ -56,7 +61,7 @@ class _ReportData {
     required this.customers,
   });
   double get grossProfit => sales - cogs;
-  double get netProfit => grossProfit - otherExpenses;
+  double get netProfit => grossProfit - otherExpenses - salaries;
 }
 
 /// Sales & Profit Reports.
@@ -271,6 +276,7 @@ class _ProductionReportsScreenState extends State<ProductionReportsScreen> {
       cogs: cogs,
       otherExpenses: otherExpenses,
       nonOpExpenses: nonOpExpenses,
+      salaries: await db.getSalaryTotal(bizId, start: _start, end: _end),
       prodExpensesInfo: prodExpensesInfo,
       rawStockValue: rawValue,
       finishedStockValue: finishedValue,
@@ -289,7 +295,8 @@ class _ProductionReportsScreenState extends State<ProductionReportsScreen> {
         ),
       );
 
-  Widget _statCard(String label, String value, IconData icon, Color color) {
+  Widget _statCard(String label, String value, IconData icon, Color color,
+      {Color? valueColor}) {
     return Card(
       margin: EdgeInsets.zero,
       child: Padding(
@@ -309,7 +316,10 @@ class _ProductionReportsScreenState extends State<ProductionReportsScreen> {
             const SizedBox(height: 2),
             Text(
               value,
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+              style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  color: valueColor),
               overflow: TextOverflow.ellipsis,
             ),
           ],
@@ -371,6 +381,7 @@ class _ProductionReportsScreenState extends State<ProductionReportsScreen> {
                       cogs: 0,
                       otherExpenses: 0,
                       nonOpExpenses: 0,
+                      salaries: 0,
                       prodExpensesInfo: 0,
                       rawStockValue: 0,
                       finishedStockValue: 0,
@@ -409,6 +420,9 @@ class _ProductionReportsScreenState extends State<ProductionReportsScreen> {
                           d.grossProfit >= 0
                               ? AppColors.green
                               : AppColors.red,
+                          valueColor: d.grossProfit >= 0
+                              ? AppColors.green
+                              : AppColors.red,
                         ),
                         _statCard(
                           p.t('expenses'),
@@ -416,11 +430,21 @@ class _ProductionReportsScreenState extends State<ProductionReportsScreen> {
                           Icons.money_off,
                           AppColors.red,
                         ),
+                        if (d.salaries > 0)
+                          _statCard(
+                            p.t('salary'),
+                            formatRs(d.salaries),
+                            Icons.badge,
+                            AppColors.red,
+                          ),
                         _statCard(
                           p.t('netProfit'),
                           formatRs(d.netProfit),
                           Icons.account_balance_wallet,
                           d.netProfit >= 0 ? AppColors.green : AppColors.red,
+                          valueColor: d.netProfit >= 0
+                              ? AppColors.green
+                              : AppColors.red,
                         ),
                         _statCard(
                           p.t('prodExpenses'),
