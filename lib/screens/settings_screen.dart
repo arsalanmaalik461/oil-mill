@@ -357,6 +357,57 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  /// Imports a backup/statement JSON file into the CURRENTLY OPEN
+  /// account only (unlike full restore, which replaces every account).
+  /// The current account's existing data is replaced by the file's data;
+  /// other accounts on this phone are untouched.
+  Future<void> _importIntoAccount(AppProvider p) async {
+    final proceed = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        content: Text(p.t('importIntoAccountConfirm')),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(c, false),
+              child: Text(p.t('cancel'))),
+          TextButton(
+            onPressed: () => Navigator.pop(c, true),
+            child: Text(p.t('importIntoAccount')),
+          ),
+        ],
+      ),
+    );
+    if (proceed != true || !mounted) return;
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['json'],
+    );
+    if (result == null || result.files.isEmpty) return;
+    try {
+      final picked = result.files.single;
+      final String content;
+      if (picked.path != null) {
+        content = await File(picked.path!).readAsString();
+      } else if (picked.bytes != null) {
+        content = utf8.decode(picked.bytes!);
+      } else {
+        throw FormatException(p.t('couldNotReadFile'));
+      }
+      final data = jsonDecode(content) as Map<String, dynamic>;
+      if (data['app'] != 'namat_oil_mill') {
+        throw FormatException(p.t('importFailed'));
+      }
+      await _db.importBusinessData(p.businessId, data);
+      if (!mounted) return;
+      p.bump();
+      showSnack(context, p.t('importedToAccount'));
+      _filled = false;
+      await _load();
+    } catch (e) {
+      if (mounted) showSnack(context, '${p.t('importFailed')}: $e');
+    }
+  }
+
   // ---------------- Google Drive ----------------
 
   /// Restores an existing Google session (silently) so the section can
@@ -911,6 +962,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   leading: const Icon(Icons.download, color: AppColors.primary),
                   title: Text(p.t('importBackup')),
                   onTap: () => _importBackup(p),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.move_to_inbox, color: AppColors.primary),
+                  title: Text(p.t('importIntoAccount')),
+                  onTap: () => _importIntoAccount(p),
                 ),
               ],
             ),
