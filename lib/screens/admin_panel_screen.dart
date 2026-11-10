@@ -22,7 +22,6 @@ class AdminPanelScreen extends StatefulWidget {
 
 class _AdminPanelScreenState extends State<AdminPanelScreen> {
   final _bizCtrl = TextEditingController();
-  final _userCtrl = TextEditingController();
   final _emailCtrl = TextEditingController();
   final _phoneCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
@@ -43,7 +42,6 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
   @override
   void dispose() {
     _bizCtrl.dispose();
-    _userCtrl.dispose();
     _emailCtrl.dispose();
     _phoneCtrl.dispose();
     _passCtrl.dispose();
@@ -66,9 +64,8 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
 
   Future<void> _createUser(AppProvider p) async {
     final business = _bizCtrl.text.trim();
-    final username = _userCtrl.text.trim().toLowerCase();
     final password = _passCtrl.text;
-    if (business.isEmpty || username.isEmpty || password.isEmpty) {
+    if (business.isEmpty || password.isEmpty) {
       showSnack(context, p.t('fillAllFields'));
       return;
     }
@@ -78,21 +75,62 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
     }
     setState(() => _creating = true);
     try {
-      await FirebaseService.instance.createUser(
-        username: username,
-        businessName: business,
-        email: _emailCtrl.text.trim(),
-        phone: _phoneCtrl.text.trim(),
-        password: password,
-      );
+      // No hand-typed user ID any more: every user automatically gets
+      // the next free numeric ID. If one is somehow taken in between,
+      // generate the next one and retry.
+      String? createdId;
+      for (var attempt = 0; attempt < 5 && createdId == null; attempt++) {
+        final candidate = await FirebaseService.instance.generateUserId();
+        try {
+          await FirebaseService.instance.createUser(
+            username: candidate,
+            businessName: business,
+            email: _emailCtrl.text.trim(),
+            phone: _phoneCtrl.text.trim(),
+            password: password,
+          );
+          createdId = candidate;
+        } on StateError catch (e) {
+          if (e.message != 'user-exists') rethrow;
+        }
+      }
+      if (createdId == null) throw StateError('user-exists');
       if (!mounted) return;
-      showSnack(context, p.t('userCreated'));
       _bizCtrl.clear();
-      _userCtrl.clear();
       _emailCtrl.clear();
       _phoneCtrl.clear();
       _passCtrl.clear();
       await _loadUsers();
+      if (!mounted) return;
+      // Show the auto-generated ID clearly — this is what the new user
+      // will type on the login screen.
+      await showDialog<void>(
+        context: context,
+        builder: (c) => AlertDialog(
+          title: Text(p.t('userCreated')),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(p.t('usernameLbl')),
+              const SizedBox(height: 6),
+              Text(
+                createdId!,
+                style: const TextStyle(
+                    fontSize: 34, fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 6),
+              Text(business,
+                  style: const TextStyle(color: AppColors.textGrey)),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(c),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
     } on StateError catch (e) {
       if (!mounted) return;
       showSnack(
@@ -244,13 +282,6 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
                     controller: _bizCtrl,
                     decoration:
                         InputDecoration(labelText: p.t('businessName')),
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: _userCtrl,
-                    autocorrect: false,
-                    decoration:
-                        InputDecoration(labelText: p.t('usernameLbl')),
                   ),
                   const SizedBox(height: 10),
                   TextField(

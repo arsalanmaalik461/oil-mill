@@ -297,6 +297,25 @@ extension FirebaseUsers on FirebaseService {
     return rec;
   }
 
+  /// Smallest positive integer (as a string) not already used as a
+  /// username — the admin no longer types user IDs by hand, every new
+  /// user automatically gets a different one (existing IDs are numeric:
+  /// '1', '2', ...). [createUser] still re-checks for a clash.
+  Future<String> generateUserId() async {
+    if (!isConfigured) throw StateError('firebase-not-configured');
+    final snap = await _users.get();
+    final used = <int>{};
+    for (final d in snap.docs) {
+      final n = int.tryParse(d.id);
+      if (n != null && n > 0) used.add(n);
+    }
+    var candidate = 1;
+    while (used.contains(candidate)) {
+      candidate++;
+    }
+    return '$candidate';
+  }
+
   Future<void> createUser({
     required String username,
     required String businessName,
