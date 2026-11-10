@@ -19,8 +19,13 @@ class _InputRow {
 class _OutputRow {
   StockItem? item;
   final qtyCtrl = TextEditingController();
+  final rateCtrl = TextEditingController();
   double get qty => double.tryParse(qtyCtrl.text.trim()) ?? 0;
-  void dispose() => qtyCtrl.dispose();
+  double get saleRate => double.tryParse(rateCtrl.text.trim()) ?? 0;
+  void dispose() {
+    qtyCtrl.dispose();
+    rateCtrl.dispose();
+  }
 }
 
 class _ExpenseRow {
@@ -58,6 +63,7 @@ class _ProductionBatchFormScreenState extends State<ProductionBatchFormScreen> {
   int _batchNo = 0;
   DateTime _date = DateTime.now();
   bool _allowNegative = false;
+  String _allocMethod = 'quantity';
   bool _saving = false;
   bool _loading = true;
 
@@ -140,11 +146,18 @@ class _ProductionBatchFormScreenState extends State<ProductionBatchFormScreen> {
         inputs.add((itemId: r.item!.id!, qty: r.qty));
       }
     }
-    final outputs = <({int itemId, double qty})>[];
+    final outputs = <({int itemId, double qty, double? saleRate})>[];
     for (final r in _outputs) {
       if (r.item != null && r.qty > 0) {
-        outputs.add((itemId: r.item!.id!, qty: r.qty));
+        outputs.add((itemId: r.item!.id!,
+            qty: r.qty,
+            saleRate: r.saleRate > 0 ? r.saleRate : null));
       }
+    }
+    if (_allocMethod == 'value' &&
+        outputs.any((o) => o.saleRate == null)) {
+      showSnack(context, p.t('saleRateReq'));
+      return;
     }
     if (inputs.isEmpty || outputs.isEmpty) {
       showSnack(context,
@@ -161,6 +174,7 @@ class _ProductionBatchFormScreenState extends State<ProductionBatchFormScreen> {
           note: '',
           wastageQty: double.tryParse(_wastageQtyCtrl.text.trim()) ?? 0,
           wastageNote: _wastageNoteCtrl.text.trim(),
+          allocationMethod: _allocMethod,
         ),
         inputs: inputs,
         outputs: outputs,
@@ -254,6 +268,24 @@ class _ProductionBatchFormScreenState extends State<ProductionBatchFormScreen> {
 
             // ---------------- Outputs (finished goods) ----------------
             _sectionTitle(p.t('finishedProduct')),
+            Row(
+              children: [
+                Text('${p.t('allocMethod')}: ',
+                    style: const TextStyle(
+                        fontSize: 13, fontWeight: FontWeight.w600)),
+                ChoiceChip(
+                  label: Text(p.t('allocQty')),
+                  selected: _allocMethod == 'quantity',
+                  onSelected: (_) => setState(() => _allocMethod = 'quantity'),
+                ),
+                const SizedBox(width: 8),
+                ChoiceChip(
+                  label: Text(p.t('allocValue')),
+                  selected: _allocMethod == 'value',
+                  onSelected: (_) => setState(() => _allocMethod = 'value'),
+                ),
+              ],
+            ),
             if (_finishedItems.isEmpty)
               Text(p.t('noData'),
                   style: const TextStyle(color: AppColors.textGrey)),
@@ -491,6 +523,16 @@ class _ProductionBatchFormScreenState extends State<ProductionBatchFormScreen> {
                   const TextInputType.numberWithOptions(decimal: true),
               onChanged: (_) => setState(() {}),
             ),
+            if (_allocMethod == 'value') ...[
+              const SizedBox(height: 10),
+              TextField(
+                controller: r.rateCtrl,
+                decoration: InputDecoration(labelText: p.t('expSaleRate')),
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                onChanged: (_) => setState(() {}),
+              ),
+            ],
           ],
         ),
       ),

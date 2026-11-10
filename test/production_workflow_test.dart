@@ -53,7 +53,7 @@ void main() {
           businessId: 1, batchNo: batchNo, dateTime: DateTime(2026, 11, 3),
           wastageQty: 50, wastageNote: 'pressing loss'),
       inputs: [(itemId: rawId, qty: 1000)],
-      outputs: [(itemId: khalId, qty: 600), (itemId: oilId, qty: 350)],
+      outputs: [(itemId: khalId, qty: 600, saleRate: null), (itemId: oilId, qty: 350, saleRate: null)],
       expenses: [
         ProductionExpense(
             batchId: 0, category: 'labour', amount: 5000,
@@ -82,7 +82,7 @@ void main() {
         batch: ProductionBatch(
             businessId: 1, batchNo: 99, dateTime: DateTime(2026, 11, 3)),
         inputs: [(itemId: rawId, qty: 99999)],
-        outputs: [(itemId: khalId, qty: 10)],
+        outputs: [(itemId: khalId, qty: 10, saleRate: null)],
         expenses: const [],
       ),
       throwsA(isA<StateError>()),
@@ -118,7 +118,7 @@ void main() {
           businessId: 1, batchNo: await db.getNextBatchNo(1),
           dateTime: DateTime(2026, 11, 5)),
       inputs: [(itemId: rawId, qty: 200)],
-      outputs: [(itemId: khalId, qty: 120)],
+      outputs: [(itemId: khalId, qty: 120, saleRate: null)],
       expenses: const [],
     );
     expect(await db.getItemQty(rawId), 500);

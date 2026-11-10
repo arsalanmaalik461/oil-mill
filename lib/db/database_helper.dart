@@ -1002,7 +1002,7 @@ class DatabaseHelper {
   Future<int> createProductionBatch({
     required ProductionBatch batch,
     required List<({int itemId, double qty})> inputs,
-    required List<({int itemId, double qty})> outputs,
+    required List<({int itemId, double qty, double? saleRate})> outputs,
     required List<ProductionExpense> expenses,
     bool allowNegative = false,
   }) async {
@@ -1066,9 +1066,54 @@ class DatabaseHelper {
         });
       }
       final totalCost = materialCost + expenseCost;
+      // Joint-cost allocation (Phase 2): 'value' splits the total by
+      // each output's relative sales value (qty x expected sale rate),
+      // so oil and khal no longer share one identical per-unit cost;
+      // 'quantity' splits by kg-normalised quantity (litres converted
+      // through the item's density, mann = 40 kg). Falls back to raw
+      // quantity when no usable weights exist.
+      double kgFactor(String unit, double? density) {
+        final u = unit.toLowerCase();
+        if (u.contains('ton')) return 1000;
+        if (u.contains('mann') || u.contains('maund') || u.contains('mun')) {
+          return 40;
+        }
+        if (u.contains('litre') || u.contains('liter') || u.contains('ltr')) {
+          return density ?? 1;
+        }
+        if (u.contains('40')) return 40;
+        return 1;
+      }
+
+      final weights = <double>[];
+      var totalWeight = 0.0;
       for (final out in outputs) {
+        var w = 0.0;
+        if (batch.allocationMethod == 'value') {
+          w = out.qty * (out.saleRate ?? 0);
+        } else {
+          final rows =
+              await txn.query('items', where: 'id = ?', whereArgs: [out.itemId]);
+          if (rows.isNotEmpty) {
+            w = out.qty *
+                kgFactor(rows.first['unit'] as String? ?? '',
+                    (rows.first['density'] as num?)?.toDouble());
+          }
+        }
+        weights.add(w);
+        totalWeight += w;
+      }
+      if (totalWeight <= 0) {
+        weights
+          ..clear()
+          ..addAll(outputs.map((o) => o.qty));
+        totalWeight = totalOutQty;
+      }
+      var oi = 0;
+      for (final out in outputs) {
+        final w = weights[oi++];
         if (out.qty <= 0) continue;
-        final allocated = totalCost * (out.qty / totalOutQty);
+        final allocated = totalCost * (w / totalWeight);
         final perUnit = allocated / out.qty;
         await txn.insert('production_outputs', {
           'batch_id': batchId, 'item_id': out.itemId, 'qty': out.qty,
