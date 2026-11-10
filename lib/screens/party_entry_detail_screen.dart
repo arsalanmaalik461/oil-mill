@@ -122,6 +122,7 @@ class _PartyEntryDetailScreenState extends State<PartyEntryDetailScreen> {
       note: _txn.note,
       dateTime: _txn.dateTime,
       attachmentPath: _txn.attachmentPath,
+      method: _txn.method,
     );
     await DatabaseHelper.instance.updatePartyTransaction(flipped);
     if (!mounted) return;

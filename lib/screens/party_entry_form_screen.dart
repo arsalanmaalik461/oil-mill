@@ -33,6 +33,7 @@ class _PartyEntryFormScreenState extends State<PartyEntryFormScreen> {
   final _note = TextEditingController();
   late DateTime _when;
   String? _attachment;
+  String _method = 'cash';
   bool _saving = false;
 
   bool get _isUdhaar => widget.type == 'udhaar';
@@ -49,6 +50,7 @@ class _PartyEntryFormScreenState extends State<PartyEntryFormScreen> {
       _note.text = e.note;
       _when = e.dateTime;
       _attachment = e.attachmentPath;
+      _method = e.method;
     } else {
       _when = DateTime.now();
     }
@@ -98,9 +100,11 @@ class _PartyEntryFormScreenState extends State<PartyEntryFormScreen> {
       note: _note.text.trim(),
       dateTime: _when,
       attachmentPath: _attachment,
+      method: _method,
     );
     if (widget.existing == null) {
-      await db.insertPartyTransaction(txn);
+      // Linked save: a cash entry also moves the cash drawer.
+      await db.insertLedgerEntry(txn);
     } else {
       await db.updatePartyTransaction(txn);
     }
@@ -191,6 +195,30 @@ class _PartyEntryFormScreenState extends State<PartyEntryFormScreen> {
                   },
                 ),
               ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Text(p.t('payMethod'),
+              style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textGrey)),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            children: [
+              for (final m in const [
+                ('cash', 'cashLabel', Icons.payments),
+                ('bank', 'bank', Icons.account_balance),
+                ('jazzcash', 'jazzcash', Icons.phone_android),
+                ('easypaisa', 'easypaisa', Icons.phone_android),
+              ])
+                ChoiceChip(
+                  label: Text(p.t(m.$2)),
+                  avatar: Icon(m.$3, size: 16),
+                  selected: _method == m.$1,
+                  onSelected: (_) => setState(() => _method = m.$1),
+                ),
             ],
           ),
           const SizedBox(height: 8),
