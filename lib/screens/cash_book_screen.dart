@@ -292,6 +292,26 @@ class _CashBookScreenState extends State<CashBookScreen> {
                                     ? partyNames[e.partyId]
                                     : null;
                                 return InkWell(
+                                  onTap: () async {
+                                    if (e.sourceId != null) {
+                                      // Automatically posted entry:
+                                      // it must be edited at its source
+                                      // so both books stay in sync.
+                                      showSnack(
+                                          context, p.t('linkedEntryNote'));
+                                      return;
+                                    }
+                                    final r = await Navigator.push<bool>(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => CashEntryFormScreen(
+                                          type: e.type,
+                                          existing: e,
+                                        ),
+                                      ),
+                                    );
+                                    if (r == true && mounted) _reload();
+                                  },
                                   onLongPress: () => _deleteEntry(e),
                                   child: Padding(
                                     padding: const EdgeInsets.symmetric(

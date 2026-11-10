@@ -77,18 +77,23 @@ class _ExpenseBookScreenState extends State<ExpenseBookScreen> {
     );
   }
 
-  Future<void> _addExpense() async {
+  Future<void> _addExpense([Expense? existing]) async {
     final p = context.read<AppProvider>();
-    final categoryCtrl = TextEditingController();
-    final amountCtrl = TextEditingController();
-    final noteCtrl = TextEditingController();
-    var account = 'cash';
-    var when = DateTime.now();
+    final categoryCtrl = TextEditingController(text: existing?.category ?? '');
+    final amountCtrl = TextEditingController(
+        text: existing == null
+            ? ''
+            : (existing.amount == existing.amount.roundToDouble()
+                ? existing.amount.toStringAsFixed(0)
+                : existing.amount.toString()));
+    final noteCtrl = TextEditingController(text: existing?.note ?? '');
+    var account = existing?.account ?? 'cash';
+    var when = existing?.dateTime ?? DateTime.now();
     final ok = await showDialog<bool>(
       context: context,
       builder: (c) => StatefulBuilder(
         builder: (c, setLocal) => AlertDialog(
-          title: Text(p.t('addExpense')),
+          title: Text(existing == null ? p.t('addExpense') : p.t('editEntry')),
           content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -179,14 +184,21 @@ class _ExpenseBookScreenState extends State<ExpenseBookScreen> {
       showSnack(context, p.t('invalidAmount'));
       return;
     }
-    await _db.insertExpense(Expense(
+    final entry = Expense(
+      id: existing?.id,
       businessId: p.businessId,
       category: category,
       amount: amount,
       note: note,
       account: account,
       dateTime: when,
-    ));
+    );
+    if (existing == null) {
+      await _db.insertExpense(entry);
+    } else {
+      // The linked cash entry follows the edit automatically.
+      await _db.updateExpense(entry);
+    }
     if (!mounted) return;
     showSnack(context, p.t('savedSuccessfully'));
     _load();
@@ -299,6 +311,7 @@ class _ExpenseBookScreenState extends State<ExpenseBookScreen> {
                                       fontSize: 15,
                                       fontWeight: FontWeight.w700,
                                       color: AppColors.red)),
+                              onTap: () => _addExpense(e),
                               onLongPress: () => _deleteExpense(e),
                             ),
                           );

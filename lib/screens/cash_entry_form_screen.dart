@@ -14,7 +14,10 @@ import 'select_party_screen.dart';
 /// fields, optional bill photo, and a big coloured SAVE button.
 class CashEntryFormScreen extends StatefulWidget {
   final String type; // 'in' | 'out'
-  const CashEntryFormScreen({super.key, required this.type});
+
+  /// When set, edits this (manual) entry instead of creating one.
+  final CashEntry? existing;
+  const CashEntryFormScreen({super.key, required this.type, this.existing});
 
   @override
   State<CashEntryFormScreen> createState() => _CashEntryFormScreenState();
@@ -27,6 +30,25 @@ class _CashEntryFormScreenState extends State<CashEntryFormScreen> {
   Party? _party;
   String? _attachment;
   bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final e = widget.existing;
+    if (e != null) {
+      _amount.text = e.amount == e.amount.roundToDouble()
+          ? e.amount.toStringAsFixed(0)
+          : e.amount.toString();
+      _note.text = e.note;
+      _when = e.dateTime;
+      _attachment = e.attachmentPath;
+      if (e.partyId != null) {
+        DatabaseHelper.instance.getParty(e.partyId!).then((party) {
+          if (party != null && mounted) setState(() => _party = party);
+        });
+      }
+    }
+  }
 
   bool get _isIn => widget.type == 'in';
   Color get _color => _isIn ? AppColors.green : AppColors.red;
@@ -74,17 +96,23 @@ class _CashEntryFormScreenState extends State<CashEntryFormScreen> {
       return;
     }
     setState(() => _saving = true);
-    await DatabaseHelper.instance.insertCashEntry(
-      CashEntry(
-        businessId: p.businessId,
-        type: widget.type,
-        amount: amount,
-        note: _note.text.trim(),
-        partyId: _party?.id,
-        dateTime: _when,
-        attachmentPath: _attachment,
-      ),
+    final entry = CashEntry(
+      id: widget.existing?.id,
+      businessId: p.businessId,
+      type: widget.type,
+      amount: amount,
+      note: _note.text.trim(),
+      partyId: _party?.id,
+      dateTime: _when,
+      attachmentPath: _attachment,
+      sourceTable: widget.existing?.sourceTable,
+      sourceId: widget.existing?.sourceId,
     );
+    if (widget.existing == null) {
+      await DatabaseHelper.instance.insertCashEntry(entry);
+    } else {
+      await DatabaseHelper.instance.updateCashEntry(entry);
+    }
     if (!mounted) return;
     context.read<AppProvider>().bump();
     Navigator.pop(context, true);
