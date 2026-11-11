@@ -1989,6 +1989,19 @@ class DatabaseHelper {
     return total;
   }
 
+  /// Total rows across ALL of a business's tables (parents and
+  /// children) — the same counting [FirebaseService.cloudRowCount]
+  /// does on the cloud side, so the two can be compared directly.
+  Future<int> totalBusinessRows(int bizId) async {
+    final data = await exportBusinessData(bizId);
+    var n = 0;
+    for (final e in data.entries) {
+      if (e.key == 'app' || e.key == 'version') continue;
+      n += (e.value as List).length;
+    }
+    return n;
+  }
+
   /// All data belonging to ONE business, as a JSON-safe map
   /// (same shape as [exportJson] but business-scoped).
   Future<Map<String, dynamic>> exportBusinessData(int bizId) async {

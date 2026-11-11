@@ -303,25 +303,17 @@ class _LoginScreenState extends State<LoginScreen> {
           }
         }
 
-        // 5) Cloud: when this user's local business is EMPTY but their
-        // cloud backup holds data, restore it now — this is what makes
-        // the data follow the account to a new phone. When local data
-        // exists, push the latest up in the background instead.
+        // 5) Cloud: the account's data must simply BE there after
+        // sign-in — no manual sync, no file import (owner's rule).
+        // Whichever side holds more rows wins: a richer cloud
+        // restores down to this device now; a richer local copy
+        // uploads in the background. A poorer local copy can never
+        // wipe the cloud backup.
         if (_firebase.isConfigured) {
           try {
-            final localRows = await db.businessRowCount(bizId);
-            if (localRows == 0) {
-              await _firebase
-                  .restoreUserData(rec.username, bizId)
-                  .timeout(const Duration(seconds: 45));
-            } else {
-              final uname = rec.username;
-              unawaited(() async {
-                try {
-                  await _firebase.syncUserData(uname, bizId);
-                } catch (_) {}
-              }());
-            }
+            await _firebase
+                .syncOnLogin(rec.username, bizId)
+                .timeout(const Duration(seconds: 60));
           } catch (_) {
             // Sync problems must never block sign-in.
           }

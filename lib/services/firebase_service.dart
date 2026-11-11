@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -21,6 +22,16 @@ import '../models/models.dart';
 /// `google-services.json`, the app degrades gracefully to 100% offline SQLite
 /// without crashing, and reports [isConfigured] as false.
 class FirebaseService {
+  /// The login-time decision, kept pure so it can be unit-tested:
+  /// whichever side holds more rows wins. 'restore' = download the
+  /// cloud copy, 'upload' = push this device's copy up, 'none' =
+  /// both sides empty.
+  static String loginSyncDecision(int localRows, int cloudRows) {
+    if (cloudRows > localRows) return 'restore';
+    if (localRows > 0) return 'upload';
+    return 'none';
+  }
+
   FirebaseService._();
   static final FirebaseService instance = FirebaseService._();
 
@@ -627,11 +638,17 @@ extension FirebaseUsers on FirebaseService {
       if (e.key == 'app' || e.key == 'version') continue;
       localRows += (e.value as List).length;
     }
-    if (localRows == 0) {
-      try {
-        final cloud = await cloudRowCount(username);
-        if (cloud > 0) return cloud;
-      } catch (_) {
+    // A local copy that holds FEWER rows than the cloud must never
+    // overwrite it — the cloud is richer (another device, or this
+    // device before a reinstall) and the login flow restores it down
+    // instead. This extends the original empty-local guard, which
+    // let a nearly-empty business (e.g. 1 stray row) wipe a full
+    // cloud backup.
+    try {
+      final cloud = await cloudRowCount(username);
+      if (cloud > localRows) return cloud;
+    } catch (_) {
+      if (localRows == 0) {
         return 0; // cannot verify the cloud copy — write nothing
       }
     }
@@ -709,6 +726,31 @@ extension FirebaseUsers on FirebaseService {
     await prefs.setString(
         'last_sync_at_$username', DateTime.now().toIso8601String());
     return count;
+  }
+
+  /// Makes the account's data simply BE in the app after sign-in —
+  /// no manual sync, no file import (owner's requirement). A richer
+  /// cloud restores down to this device before sign-in completes; a
+  /// richer (or equal) local copy uploads in the background. Returns
+  /// what happened: 'restored' | 'uploading' | 'none'.
+  Future<String> syncOnLogin(String username, int businessId) async {
+    if (!isConfigured) return 'none';
+    final local = await DatabaseHelper.instance.totalBusinessRows(businessId);
+    final cloud = await cloudRowCount(username);
+    switch (FirebaseService.loginSyncDecision(local, cloud)) {
+      case 'restore':
+        await restoreUserData(username, businessId);
+        return 'restored';
+      case 'upload':
+        unawaited(() async {
+          try {
+            await syncUserData(username, businessId);
+          } catch (_) {}
+        }());
+        return 'uploading';
+      default:
+        return 'none';
+    }
   }
 
   /// Downloads this user's cloud data and replaces the local data of
