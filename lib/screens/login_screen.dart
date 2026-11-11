@@ -250,24 +250,23 @@ class _LoginScreenState extends State<LoginScreen> {
         // is never opened, renamed or claimed.
         final db = DatabaseHelper.instance;
         final prefs = await SharedPreferences.getInstance();
-        final everLoggedIn = (prefs.getBool('ever_logged_in') ?? false) ||
-            (prefs.getString('session_username')?.isNotEmpty ?? false) ||
-            prefs.getString('cached_users') != null;
         var biz = await db.getBusinessByUsername(rec.username);
         if (biz == null) {
-          // Safe takeover of the unbound default business, ONLY when it
-          // is empty (the fresh-install seed) or when nobody has ever
-          // signed in on this device (the owner's own pre-login data).
-          // An unbound business WITH data on a device that already had
-          // sign-ins may belong to someone else — never touch it.
+          // Safe takeover of the unbound default business, ONLY when
+          // it is completely empty (the fresh-install seed). An
+          // unbound business WITH data may belong to someone who used
+          // the app without ever signing in (the Arslan/Rehan mix-up:
+          // the first person to sign in on that phone used to capture
+          // it) — never claim it, never overwrite it. This user simply
+          // gets a fresh business below plus their own cloud data.
           final all = await db.getBusinesses();
           final unbound = all
               .where((b) => b.appUsername.isEmpty && b.id != null)
               .toList();
           if (unbound.length == 1) {
             final candidate = unbound.first;
-            final rows = await db.businessRowCount(candidate.id!);
-            if (rows == 0 || !everLoggedIn) {
+            final rows = await db.totalBusinessRows(candidate.id!);
+            if (rows == 0) {
               await db.updateBusiness(Business(
                 id: candidate.id,
                 name: rec.businessName.isEmpty
