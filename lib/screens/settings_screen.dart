@@ -349,22 +349,44 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
     );
     if (proceed != true || !mounted) return;
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['json'],
-    );
+    // Picking itself can throw (permissions, content:// providers on
+    // some Android skins) — it must never crash the screen. withData
+    // loads the bytes in memory, so WhatsApp / Downloads / Drive
+    // files work even when no plain file path comes back.
+    FilePickerResult? result;
+    try {
+      result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['json'],
+        withData: true,
+      );
+    } catch (_) {
+      if (mounted) showSnack(context, p.t('importFailed'));
+      return;
+    }
     if (result == null || result.files.isEmpty) return;
     try {
       final picked = result.files.single;
       final String content;
-      if (picked.path != null) {
-        content = await File(picked.path!).readAsString();
-      } else if (picked.bytes != null) {
+      if (picked.bytes != null) {
         content = utf8.decode(picked.bytes!);
+      } else if (picked.path != null) {
+        content = await File(picked.path!).readAsString();
       } else {
         throw FormatException(p.t('couldNotReadFile'));
       }
       await _db.importJson(content);
+      // The restore replaced the businesses table, so the currently
+      // open business id may no longer exist — reopen the restored
+      // business (this account's own when the file carries it).
+      final allBiz = await _db.getBusinesses();
+      if (allBiz.isNotEmpty) {
+        final mine = allBiz
+            .where((b) => b.appUsername == p.sessionUsername)
+            .toList();
+        await p.setBusiness(
+            (mine.isNotEmpty ? mine.first : allBiz.first).id!);
+      }
       if (!mounted) return;
       p.bump();
       showSnack(context, p.t('restored'));
@@ -397,18 +419,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
     );
     if (proceed != true || !mounted) return;
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['json'],
-    );
+    // Picking itself can throw (permissions, content:// providers on
+    // some Android skins) — it must never crash the screen. withData
+    // loads the bytes in memory, so WhatsApp / Downloads / Drive
+    // files work even when no plain file path comes back.
+    FilePickerResult? result;
+    try {
+      result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['json'],
+        withData: true,
+      );
+    } catch (_) {
+      if (mounted) showSnack(context, p.t('importFailed'));
+      return;
+    }
     if (result == null || result.files.isEmpty) return;
     try {
       final picked = result.files.single;
       final String content;
-      if (picked.path != null) {
-        content = await File(picked.path!).readAsString();
-      } else if (picked.bytes != null) {
+      if (picked.bytes != null) {
         content = utf8.decode(picked.bytes!);
+      } else if (picked.path != null) {
+        content = await File(picked.path!).readAsString();
       } else {
         throw FormatException(p.t('couldNotReadFile'));
       }
