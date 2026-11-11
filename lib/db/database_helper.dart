@@ -1922,12 +1922,31 @@ class DatabaseHelper {
       for (final t in allTables.reversed) {
         await txn.delete(t);
       }
+      // cash_entries has a UNIQUE index on (source_table, source_id)
+      // and daily_closings on (business_id, date): a backup carrying a
+      // duplicate pair (older app versions, hand-merged files) must
+      // not abort the whole restore — the cash row survives with its
+      // link dropped, the duplicate closing day is skipped.
+      final seenCashSource = <String>{};
+      final seenClosings = <String>{};
       for (final t in allTables) {
         final rows = (data[t] as List?) ?? [];
         for (final row in rows) {
+          final m = Map<String, dynamic>.from(row as Map);
+          if (t == 'cash_entries' &&
+              m['source_table'] != null &&
+              m['source_id'] != null) {
+            if (!seenCashSource.add('${m['source_table']}|${m['source_id']}')) {
+              m['source_id'] = null;
+            }
+          }
+          if (t == 'daily_closings' &&
+              !seenClosings.add('${m['business_id']}|${m['date']}')) {
+            continue;
+          }
           await txn.insert(
             t,
-            Map<String, dynamic>.from(row as Map),
+            m,
             // attendance has UNIQUE(staff_id, date): a backup containing a
             // duplicate day must not abort the whole restore.
             conflictAlgorithm:
@@ -2084,6 +2103,10 @@ class DatabaseHelper {
         });
       }
 
+      // UNIQUE-collision trackers for this import (see guards below).
+      final importCashSources = <String>{};
+      final importClosingDays = <String>{};
+
       // Parents first (their id maps drive every reference rewrite).
       final idMaps = <String, Map<int, int>>{};
       for (final t in _bizTables) {
@@ -2094,6 +2117,30 @@ class DatabaseHelper {
           final oldId = row['id'] as int?;
           row['business_id'] = bizId;
           remapRefs(row, t, idMaps);
+          if (t == 'cash_entries' &&
+              row['source_table'] != null &&
+              row['source_id'] != null) {
+            // The UNIQUE(source_table, source_id) index is global
+            // across businesses on this phone: an imported link that
+            // collides (another account's row, or a duplicate inside
+            // the file) keeps the money row but drops the link — it
+            // must never abort the whole import.
+            final key = '${row['source_table']}|${row['source_id']}';
+            var clash = !importCashSources.add(key);
+            if (!clash) {
+              final hit = await txn.query('cash_entries',
+                  columns: ['id'],
+                  where: 'source_table = ? AND source_id = ?',
+                  whereArgs: [row['source_table'], row['source_id']],
+                  limit: 1);
+              clash = hit.isNotEmpty;
+            }
+            if (clash) row['source_id'] = null;
+          }
+          if (t == 'daily_closings' &&
+              !importClosingDays.add('${row['date']}')) {
+            continue; // duplicate closing day inside the file
+          }
           if (oldId != null && !await idTaken(t, oldId)) {
             await txn.insert(t, row);
             map[oldId] = oldId;
