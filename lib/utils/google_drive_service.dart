@@ -10,6 +10,7 @@ import 'package:google_sign_in/google_sign_in.dart';
 import 'package:googleapis/drive/v3.dart' as drive;
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../db/database_helper.dart';
 
@@ -169,6 +170,22 @@ class GoogleDriveService {
   /// Runs silently in the background without disturbing the user.
   Future<bool> runAutoBackupIfDue() async {
     final prefs = await SharedPreferences.getInstance();
+    // On-device daily record file (owner's request): one full-data
+    // JSON per day written onto the phone itself, independent of the
+    // Drive sign-in, so the record exists even fully offline. Runs
+    // with the daily check — the first app open of a new day writes
+    // that day's file.
+    try {
+      final today = DateFormat('yyyy-MM-dd').format(DateTime.now());
+      if (prefs.getString('last_local_backup_file_date') != today) {
+        final dir = await getExternalStorageDirectory() ??
+            await getApplicationDocumentsDirectory();
+        final json = await DatabaseHelper.instance.exportJson();
+        await File('${dir.path}/namat_backup_$today.json')
+            .writeAsString(json);
+        await prefs.setString('last_local_backup_file_date', today);
+      }
+    } catch (_) {}
     try {
       final enabled = prefs.getBool('auto_drive_backup_enabled') ?? true;
       if (!enabled) return false;
@@ -206,6 +223,31 @@ class GoogleDriveService {
           DateTime.now().toIso8601String());
       debugPrint('Automated Drive backup FAILED: $e');
       await BackupNotifier.instance.showBackupFailed();
+      return false;
+    }
+  }
+
+  /// Immediate backup (owner's rule: an entry must reach Drive at
+  /// once, not at the next daily run). Uploads the CURRENT full
+  /// database JSON under today's backup file name — the file is
+  /// overwritten through the day, so Drive always holds the newest
+  /// state. Returns false when Drive is not connected.
+  Future<bool> uploadCurrentBackupNow() async {
+    try {
+      if (currentAccount == null) {
+        final silent = await _googleSignIn.signInSilently();
+        if (silent == null) return false;
+      }
+      final prefs = await SharedPreferences.getInstance();
+      final todayStr = DateFormat('yyyy-MM-dd').format(DateTime.now());
+      final json = await DatabaseHelper.instance.exportJson();
+      await uploadJson(json, 'namat_backup_$todayStr.json');
+      await prefs.setString('last_auto_drive_backup_date', todayStr);
+      await prefs.setString(
+          'last_auto_drive_backup_time', DateTime.now().toIso8601String());
+      await prefs.setString('drive_backup_status', 'ok');
+      return true;
+    } catch (_) {
       return false;
     }
   }
