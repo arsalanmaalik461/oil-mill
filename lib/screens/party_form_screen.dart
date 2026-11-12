@@ -27,6 +27,7 @@ class _PartyFormScreenState extends State<PartyFormScreen> {
   final _address = TextEditingController();
   final _opening = TextEditingController();
   String _openingKind = 'get'; // 'get' = you will get (positive) | 'give'
+  bool _openingLocked = false; // party already has entries: opening is history
 
   bool get _editing => widget.party != null;
 
@@ -142,6 +143,16 @@ class _PartyFormScreenState extends State<PartyFormScreen> {
         _opening.text = _numText(party.openingBalance.abs());
       }
       _openingKind = party.openingBalance < 0 ? 'give' : 'get';
+      // A party that already has entries keeps its opening balance —
+      // the field locks, so adding just a phone number (or leaving
+      // the balance blank) can never disturb the record.
+      if (party.id != null) {
+        DatabaseHelper.instance
+            .countPartyTransactions(party.id!)
+            .then((n) {
+          if (mounted && n > 0) setState(() => _openingLocked = true);
+        });
+      }
     }
   }
 
@@ -161,8 +172,16 @@ class _PartyFormScreenState extends State<PartyFormScreen> {
       showSnack(context, p.t('requiredField'));
       return;
     }
-    final amount = double.tryParse(_opening.text.trim()) ?? 0;
-    final signed = _openingKind == 'get' ? amount.abs() : -amount.abs();
+    // Owner's rule: editing WITHOUT writing a balance keeps the
+    // stored opening exactly as it was — and a locked opening (the
+    // party has entries) is never rewritten from this form at all.
+    final double signed;
+    if (_editing && (_openingLocked || _opening.text.trim().isEmpty)) {
+      signed = widget.party!.openingBalance;
+    } else {
+      final amount = double.tryParse(_opening.text.trim()) ?? 0;
+      signed = _openingKind == 'get' ? amount.abs() : -amount.abs();
+    }
     final party = Party(
       id: widget.party?.id,
       businessId: widget.party?.businessId ?? p.businessId,
@@ -265,12 +284,21 @@ class _PartyFormScreenState extends State<PartyFormScreen> {
             const SizedBox(height: 14),
             TextField(
               controller: _opening,
+              enabled: !_openingLocked,
               decoration: InputDecoration(labelText: p.t('openingBalance')),
               keyboardType:
                   const TextInputType.numberWithOptions(decimal: true),
             ),
             const SizedBox(height: 10),
             _openingToggle(p),
+            if (_openingLocked) ...[
+              const SizedBox(height: 8),
+              Text(
+                p.t('openingLockedHint'),
+                style:
+                    const TextStyle(fontSize: 12, color: Colors.black54),
+              ),
+            ],
             const SizedBox(height: 28),
             SizedBox(
               width: double.infinity,
