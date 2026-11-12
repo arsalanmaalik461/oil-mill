@@ -100,21 +100,21 @@ class _HomeScreenState extends State<HomeScreen> {
             : _tab == 'dealers'
                 ? 'dealer'
                 : null;
-    final parties =
-        _tab == 'banks' ? <Party>[] : await db.getParties(bizId, type: type);
-    final partyRows = <_PartyRow>[];
-    for (final party in parties) {
-      final bal = await db.getPartyBalance(party.id!);
-      final txns = await db.getPartyTransactions(party.id!);
-      partyRows.add(
-          _PartyRow(party, bal, txns.isEmpty ? null : txns.first.dateTime));
-    }
+    // One aggregate query for the whole list (was: a balance query
+    // plus a full entries fetch for every single party).
+    final summaries = _tab == 'banks'
+        ? <({Party party, double balance, DateTime? lastDate})>[]
+        : await db.getPartySummaries(bizId, type: type);
+    final partyRows = summaries
+        .map((s) => _PartyRow(s.party, s.balance, s.lastDate))
+        .toList();
     final totals = await db.getPartyTotals(bizId, type: type);
     final accounts = await db.getBankAccounts(bizId);
+    final bankBalances = await db.getBankBalances(bizId);
     final bankRows = <_BankRow>[];
     var bankTotal = 0.0;
     for (final a in accounts) {
-      final bal = await db.getBankBalance(a.id!);
+      final bal = bankBalances[a.id] ?? a.openingBalance;
       bankRows.add(_BankRow(a, bal));
       bankTotal += bal;
     }

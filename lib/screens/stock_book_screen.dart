@@ -26,13 +26,6 @@ class _StockRow {
 /// Transactions come back newest-first (date_time DESC, id DESC), so the
 /// first 'in' entry is the latest purchase; if there is no purchase, the
 /// first entry of any type is the most recent rate available.
-double _latestRate(List<StockTransaction> txns) {
-  for (final t in txns) {
-    if (t.type == 'in') return t.rate;
-  }
-  return txns.isEmpty ? 0 : txns.first.rate;
-}
-
 /// Stock Book: all items with current quantities, low-stock tab,
 /// search and a stock PDF report.
 class StockBookScreen extends StatefulWidget {
@@ -58,14 +51,12 @@ class _StockBookScreenState extends State<StockBookScreen> {
   Future<List<_StockRow>> _load() async {
     final db = DatabaseHelper.instance;
     final bizId = context.read<AppProvider>().businessId;
-    final items = await db.getItems(bizId);
-    final rows = <_StockRow>[];
-    for (final item in items) {
-      final qty = await db.getItemQty(item.id!);
-      final txns = await db.getStockTransactions(item.id!);
-      rows.add(_StockRow(item, qty,
-          txns.isEmpty ? null : txns.first.dateTime, _latestRate(txns)));
-    }
+    // One aggregate query for the whole list (was: a qty query plus
+    // a full movement history fetch for every single item).
+    final summaries = await db.getItemSummaries(bizId);
+    final rows = summaries
+        .map((s) => _StockRow(s.item, s.qty, s.lastDate, s.latestRate))
+        .toList();
     _lastRows = rows;
     return rows;
   }
