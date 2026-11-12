@@ -77,6 +77,78 @@ class _BillDetailScreenState extends State<BillDetailScreen> {
     await shareText(text);
   }
 
+  /// Returns against THIS bill: pick a quantity per stocked line.
+  /// Paid bill -> cash refund; credit bill -> the party's udhaar
+  /// drops. Goods restock at the bill's own cost snapshot.
+  Future<void> _billSalesReturn() async {
+    final p = context.read<AppProvider>();
+    final stocked = _items.where((i) => i.itemId != null).toList();
+    if (stocked.isEmpty) return;
+    final ctrls = <int, TextEditingController>{
+      for (var i = 0; i < stocked.length; i++) i: TextEditingController(),
+    };
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(p.t('salesReturn')),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (var i = 0; i < stocked.length; i++)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: TextField(
+                    controller: ctrls[i],
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    decoration: InputDecoration(
+                      labelText:
+                          '${stocked[i].name} (max ${stocked[i].qty})',
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(p.t('cancel'))),
+          ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(p.t('save'))),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final db = DatabaseHelper.instance;
+    var any = false;
+    for (var i = 0; i < stocked.length; i++) {
+      final q = double.tryParse(ctrls[i]!.text.trim()) ?? 0;
+      if (q <= 0) continue;
+      final line = stocked[i];
+      await db.saveSalesReturn(
+        businessId: _bill.businessId,
+        itemId: line.itemId!,
+        qty: q > line.qty ? line.qty : q,
+        saleRate: line.rate,
+        partyId: _bill.partyId,
+        refund: _bill.status == 'paid',
+        billId: _bill.id,
+        dateTime: DateTime.now(),
+      );
+      any = true;
+    }
+    if (!mounted) return;
+    if (any) {
+      p.bump();
+      showSnack(context, p.t('salesReturn'));
+      Navigator.pop(context, true);
+    }
+  }
+
+
   Future<void> _delete() async {
     final p = context.read<AppProvider>();
     final ok = await confirmDelete(context, p.t('confirmDelete'));
@@ -219,6 +291,12 @@ class _BillDetailScreenState extends State<BillDetailScreen> {
                       },
                       icon: const Icon(Icons.edit, color: AppColors.primary),
                       tooltip: p.t('editBill'),
+                    ),
+                    IconButton(
+                      onPressed: _billSalesReturn,
+                      icon: const Icon(Icons.assignment_return,
+                          color: AppColors.primary),
+                      tooltip: p.t('salesReturn'),
                     ),
                     IconButton(
                       onPressed: _delete,

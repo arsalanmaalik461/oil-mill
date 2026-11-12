@@ -1470,6 +1470,85 @@ class DatabaseHelper {
 
   /// Saves a purchase return in ONE transaction: stock-out plus the
   /// supplier ledger adjustment that reduces what we owe them.
+  /// Sales return, done right (the old Finished Goods dialog was
+  /// three separate inserts, restocked at the SALE rate — inflating
+  /// the cost pool — and could post BOTH a party wasool AND a cash
+  /// refund for the same goods). One transaction, and:
+  ///  - goods restock at COST: the original bill line's cost snapshot
+  ///    when [billId] is given, else the item's current unit cost —
+  ///    never at the sale rate;
+  ///  - exactly ONE money posting: a refund (cash out, drawer only
+  ///    for method 'cash') when [refund] is true, otherwise a party
+  ///    wasool credit when [partyId] is set. Never both.
+  Future<void> saveSalesReturn({
+    required int businessId,
+    required int itemId,
+    required double qty,
+    required double saleRate,
+    int? partyId,
+    required bool refund,
+    String method = 'cash',
+    int? billId,
+    required DateTime dateTime,
+  }) async {
+    final d = await db;
+    await d.transaction((txn) async {
+      // Cost of the returned goods.
+      double? costRate;
+      if (billId != null) {
+        final rows = await txn.query('bill_items',
+            columns: ['cost_rate'],
+            where: 'bill_id = ? AND item_id = ? AND cost_rate IS NOT NULL',
+            whereArgs: [billId, itemId],
+            limit: 1);
+        if (rows.isNotEmpty) {
+          costRate = (rows.first['cost_rate'] as num).toDouble();
+        }
+      }
+      costRate ??= await _replayUnitCost(txn, itemId);
+      final stockId = await txn.insert('stock_transactions', {
+        'item_id': itemId,
+        'type': 'in',
+        'qty': qty,
+        'rate': costRate,
+        'supplier_id': null,
+        'bill_no': '',
+        'note': 'Sales return',
+        'date_time': dateTime.toIso8601String(),
+        'attachment_path': null,
+        'bill_id': billId,
+      });
+      final amount = qty * saleRate;
+      if (amount <= 0) return;
+      if (refund) {
+        // Money handed back. Only a cash refund touches the drawer.
+        if (method == 'cash') {
+          await _postLinkedCash(txn,
+              businessId: businessId,
+              type: 'out',
+              amount: amount,
+              note: 'Sales return refund',
+              partyId: partyId,
+              dateTime: dateTime,
+              sourceTable: 'stock_transactions',
+              sourceId: stockId);
+        }
+      } else if (partyId != null) {
+        // Credit sale: the customer's udhaar drops. No cash moves.
+        await txn.insert('party_transactions', {
+          'party_id': partyId,
+          'type': 'wasool',
+          'amount': amount,
+          'note': 'Sales return',
+          'date_time': dateTime.toIso8601String(),
+          'attachment_path': null,
+          'method': method,
+          'bill_id': billId,
+        });
+      }
+    });
+  }
+
   Future<void> savePurchaseReturn({
     required int itemId,
     required double qty,

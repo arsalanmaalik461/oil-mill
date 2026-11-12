@@ -100,6 +100,7 @@ class _FinishedGoodsScreenState extends State<FinishedGoodsScreen> {
     final rateC = TextEditingController();
     Party? party;
     var refund = true;
+    var method = 'cash';
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(
@@ -148,6 +149,20 @@ class _FinishedGoodsScreenState extends State<FinishedGoodsScreen> {
                   value: refund,
                   onChanged: (v) => setD(() => refund = v),
                 ),
+                if (refund) ...[
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      for (final m in ['cash', 'bank', 'jazzcash', 'easypaisa'])
+                        ChoiceChip(
+                          label: Text(p.t(m)),
+                          selected: method == m,
+                          onSelected: (_) => setD(() => method = m),
+                        ),
+                    ],
+                  ),
+                ],
               ],
             ),
           ),
@@ -171,40 +186,18 @@ class _FinishedGoodsScreenState extends State<FinishedGoodsScreen> {
       showSnack(context, p.t('invalidAmount'));
       return;
     }
-    final db = DatabaseHelper.instance;
-    final bizId = p.businessId;
-    final now = DateTime.now();
-    final amount = qty * rate;
-    // Goods come back into finished stock.
-    await db.insertStockTransaction(StockTransaction(
+    // One atomic helper: restocks at COST (never the sale rate) and
+    // posts exactly one money side — refund XOR party credit.
+    await DatabaseHelper.instance.saveSalesReturn(
+      businessId: p.businessId,
       itemId: row.item.id!,
-      type: 'in',
       qty: qty,
-      rate: rate,
-      note: 'Sales return',
-      dateTime: now,
-    ));
-    // The customer's outstanding udhaar drops by the returned amount.
-    if (party != null && amount > 0) {
-      await db.insertPartyTransaction(PartyTransaction(
-        partyId: party!.id!,
-        type: 'wasool',
-        amount: amount,
-        note: 'Sales return',
-        dateTime: now,
-      ));
-    }
-    // Cash actually handed back to the customer.
-    if (refund && amount > 0) {
-      await db.insertCashEntry(CashEntry(
-        businessId: bizId,
-        type: 'out',
-        amount: amount,
-        note: 'Sales return refund',
-        partyId: party?.id,
-        dateTime: now,
-      ));
-    }
+      saleRate: rate,
+      partyId: party?.id,
+      refund: refund,
+      method: method,
+      dateTime: DateTime.now(),
+    );
     if (!mounted) return;
     p.bump();
     showSnack(context, p.t('salesReturn'));
