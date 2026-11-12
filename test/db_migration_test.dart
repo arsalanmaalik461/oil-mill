@@ -10,7 +10,7 @@ void main() {
   databaseFactory = databaseFactoryFfi;
   final helper = DatabaseHelper.instance;
 
-  test('v1 database upgrades to v11 without losing data', () async {
+  test('v1 database upgrades to v12 without losing data', () async {
     final path = '${await getDatabasesPath()}/namat_oil_mill.db';
     await databaseFactoryFfi.deleteDatabase(path);
 
@@ -97,9 +97,9 @@ void main() {
     });
     await old.close();
 
-    // --- Open with the CURRENT app (v11): migration must keep everything.
+    // --- Open with the CURRENT app (v12): migration must keep everything.
     final d = await helper.db;
-    expect(await d.getVersion(), 11);
+    expect(await d.getVersion(), 12);
     final party = await helper.getParty(partyId);
     expect(party, isNotNull);
     expect(party!.name, 'Purana Customer');
@@ -116,7 +116,7 @@ void main() {
     expect(oldTxn.single.method, 'cash'); // v7 default
     final bills = await helper.getBills(1);
     expect(bills.single.total, 3000);
-    expect(bills.single.method, 'cash'); // v11 default
+    expect(bills.single.method, 'cash'); // v11 default (bills.method arrived in v11)
     final oldBillItems = await helper.getBillItems(bills.single.id!);
     expect(oldBillItems.single.costAmount, isNull); // v8 snapshot: legacy = null
     // New tables exist and work after upgrade

@@ -9,6 +9,35 @@ class DatabaseHelper {
   DatabaseHelper._();
   Database? _db;
 
+  /// v12 performance indexes: until now the ONLY index in the whole
+  /// database was the cash-source unique index, so every balance sum
+  /// and every per-party/per-item history query scanned full tables.
+  /// These cover the hot paths (party ledger, cash book, stock, bank,
+  /// bills, production). Pure indexes — no data changes.
+  static const _indexStatements = <String>[
+    'CREATE INDEX IF NOT EXISTS idx_pt_party_date ON party_transactions(party_id, date_time)',
+    'CREATE INDEX IF NOT EXISTS idx_pt_bill ON party_transactions(bill_id)',
+    'CREATE INDEX IF NOT EXISTS idx_cash_biz_date ON cash_entries(business_id, date_time)',
+    'CREATE INDEX IF NOT EXISTS idx_stock_item_date ON stock_transactions(item_id, date_time)',
+    'CREATE INDEX IF NOT EXISTS idx_banktxn_acc_date ON bank_transactions(bank_id, date_time)',
+    'CREATE INDEX IF NOT EXISTS idx_billitems_bill ON bill_items(bill_id)',
+    'CREATE INDEX IF NOT EXISTS idx_parties_biz ON parties(business_id, deleted)',
+    'CREATE INDEX IF NOT EXISTS idx_bills_biz_date ON bills(business_id, date_time)',
+    'CREATE INDEX IF NOT EXISTS idx_exp_biz_date ON expenses(business_id, date_time)',
+    'CREATE INDEX IF NOT EXISTS idx_wallet_biz_date ON wallet_transactions(business_id, date_time)',
+    'CREATE INDEX IF NOT EXISTS idx_salary_staff ON salary_payments(staff_id)',
+    'CREATE INDEX IF NOT EXISTS idx_att_staff_date ON attendance(staff_id, date)',
+    'CREATE INDEX IF NOT EXISTS idx_prodin_batch ON production_inputs(batch_id)',
+    'CREATE INDEX IF NOT EXISTS idx_prodout_batch ON production_outputs(batch_id)',
+    'CREATE INDEX IF NOT EXISTS idx_prodexp_batch ON production_expenses(batch_id)',
+  ];
+
+  static Future<void> _createIndexes(Database d) async {
+    for (final sql in _indexStatements) {
+      await d.execute(sql);
+    }
+  }
+
   Future<Database> get db async {
     _db ??= await _open();
     return _db!;
@@ -18,7 +47,7 @@ class DatabaseHelper {
     final dir = await getDatabasesPath();
     return openDatabase(
       p.join(dir, 'namat_oil_mill.db'),
-      version: 11,
+      version: 12,
       onUpgrade: (d, oldVersion, newVersion) async {
         if (oldVersion < 11) {
           // Phase 5 audit fix: a bill paid via bank/JazzCash/Easypaisa
@@ -111,6 +140,12 @@ class DatabaseHelper {
           // "Set Date" on the party screen).
           await d.execute('ALTER TABLE parties ADD COLUMN due_date TEXT');
         }
+        if (oldVersion < 12) {
+          // v12: performance indexes only (see _indexStatements) —
+          // the app had grown to thousands of entries with full-table
+          // scans behind every list screen.
+          await _createIndexes(d);
+        }
       },
       onCreate: (d, v) async {
         await d.execute('''CREATE TABLE businesses(
@@ -183,6 +218,7 @@ class DatabaseHelper {
         await d.execute('''CREATE TABLE production_expenses(
           id INTEGER PRIMARY KEY AUTOINCREMENT, batch_id INTEGER, category TEXT,
           amount REAL, note TEXT, date_time TEXT)''');
+        await _createIndexes(d);
         // Default business so the app works out of the box.
         await d.insert('businesses', {
           'name': 'Namat Oil Mill', 'owner': '', 'phone': '', 'address': '',
@@ -980,6 +1016,92 @@ class DatabaseHelper {
       [bankId],
     );
     return opening + (r.first['s'] as num).toDouble();
+  }
+
+  // ---------------- Fast one-query list summaries ----------------
+  // The list screens used to run a balance query AND a full history
+  // fetch for EVERY row (Home: 58 parties x 3 queries over 3,025
+  // entries). These return everything a list row needs in ONE query;
+  // the figures are computed with the exact same formulas as
+  // getPartyBalance / getItemQty / getBankBalance.
+
+  /// Parties of a business with balance + last activity date.
+  Future<List<({Party party, double balance, DateTime? lastDate})>>
+      getPartySummaries(int businessId, {String? type}) async {
+    final d = await db;
+    final rows = await d.rawQuery(
+      "SELECT p.*, COALESCE(SUM(CASE WHEN t.type='udhaar' THEN t.amount "
+      "ELSE -t.amount END),0) AS entries_sum, MAX(t.date_time) AS last_date "
+      "FROM parties p LEFT JOIN party_transactions t ON t.party_id = p.id "
+      "WHERE p.business_id = ? AND p.deleted = 0"
+      "${type != null ? ' AND p.type = ?' : ''} "
+      "GROUP BY p.id ORDER BY p.name COLLATE NOCASE",
+      [businessId, if (type != null) type],
+    );
+    return rows.map((r) {
+      final party = Party.fromMap(r);
+      return (
+        party: party,
+        balance:
+            party.openingBalance + (r['entries_sum'] as num).toDouble(),
+        lastDate: r['last_date'] == null
+            ? null
+            : DateTime.parse(r['last_date'] as String),
+      );
+    }).toList();
+  }
+
+  /// Items of a business with current qty, last movement date and the
+  /// latest purchase rate (same rule as the stock screen's _latestRate:
+  /// the newest 'in' rate, else the newest movement's rate, else 0).
+  Future<
+      List<
+          ({
+            StockItem item,
+            double qty,
+            DateTime? lastDate,
+            double latestRate
+          })>> getItemSummaries(int businessId) async {
+    final d = await db;
+    final rows = await d.rawQuery(
+      "SELECT i.*, i.opening_qty + COALESCE(SUM(CASE WHEN st.type='in' "
+      "THEN st.qty ELSE -st.qty END),0) AS qty, MAX(st.date_time) AS last_date, "
+      "COALESCE("
+      "(SELECT rate FROM stock_transactions WHERE item_id = i.id AND type='in' "
+      "ORDER BY date_time DESC, id DESC LIMIT 1), "
+      "(SELECT rate FROM stock_transactions WHERE item_id = i.id "
+      "ORDER BY date_time DESC, id DESC LIMIT 1), 0) AS latest_rate "
+      "FROM items i LEFT JOIN stock_transactions st ON st.item_id = i.id "
+      "WHERE i.business_id = ? AND i.deleted = 0 "
+      "GROUP BY i.id ORDER BY i.name COLLATE NOCASE",
+      [businessId],
+    );
+    return rows.map((r) {
+      return (
+        item: StockItem.fromMap(r),
+        qty: (r['qty'] as num).toDouble(),
+        lastDate: r['last_date'] == null
+            ? null
+            : DateTime.parse(r['last_date'] as String),
+        latestRate: (r['latest_rate'] as num).toDouble(),
+      );
+    }).toList();
+  }
+
+  /// All bank balances of a business in one query: account id → balance.
+  Future<Map<int, double>> getBankBalances(int businessId) async {
+    final d = await db;
+    final rows = await d.rawQuery(
+      "SELECT a.id AS id, a.opening_balance + COALESCE(SUM(CASE WHEN "
+      "bt.type='in' THEN bt.amount ELSE -bt.amount END),0) AS bal "
+      "FROM bank_accounts a LEFT JOIN bank_transactions bt "
+      "ON bt.bank_id = a.id "
+      "WHERE a.business_id = ? AND a.deleted = 0 GROUP BY a.id",
+      [businessId],
+    );
+    return {
+      for (final r in rows) (r['id'] as num).toInt(): (r['bal'] as num).toDouble()
+    };
   }
 
   Future<List<BankTransaction>> getBankTransactions(int bankId) async {
