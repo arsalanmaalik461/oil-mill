@@ -1,7 +1,7 @@
 name: oilmill
 description: "Namat Oil Mill - complete business khata app: party ledger, cash book, stock book, bill book, staff book, bank book, expenses, DigiCash and reports."
 publish_to: "none"
-version: 1.0.0+1
+version: 1.0.1+2
 
 environment:
   sdk: ">=3.4.0 <4.0.0"

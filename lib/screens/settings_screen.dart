@@ -1275,7 +1275,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
                   ),
                   const SizedBox(height: 4),
-                  Text('${p.t('version')}: 1.0.0'),
+                  Text('${p.t('version')}: 1.0.1 (Build 2)'),
                   const SizedBox(height: 10),
                   Text(p.t('permissionsNote'), style: const TextStyle(color: AppColors.textGrey, height: 1.4)),
                   const SizedBox(height: 8),
