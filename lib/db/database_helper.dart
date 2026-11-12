@@ -1088,6 +1088,77 @@ class DatabaseHelper {
     }).toList();
   }
 
+  /// Items that have at least one supplier purchase (rate comparison).
+  Future<List<StockItem>> getPurchasedItems(int businessId) async {
+    final d = await db;
+    final rows = await d.rawQuery(
+      "SELECT DISTINCT i.* FROM items i JOIN stock_transactions st "
+      "ON st.item_id = i.id AND st.type = 'in' AND st.supplier_id IS NOT NULL "
+      "WHERE i.business_id = ? AND i.deleted = 0 ORDER BY i.name COLLATE NOCASE",
+      [businessId],
+    );
+    return rows.map(StockItem.fromMap).toList();
+  }
+
+  /// Per-supplier rate history for one item (cheapest last-rate first):
+  /// how often each supplier sold it, at what last/average/min/max
+  /// rate, and how much in total.
+  Future<
+      List<
+          ({
+            Party supplier,
+            int purchases,
+            double totalQty,
+            double lastRate,
+            double avgRate,
+            double minRate,
+            double maxRate,
+            DateTime? lastDate
+          })>> getSupplierRates(int itemId) async {
+    final d = await db;
+    final rows = await d.rawQuery(
+      "SELECT st.supplier_id AS sid, COUNT(*) AS n, "
+      "COALESCE(SUM(st.qty),0) AS total_qty, AVG(st.rate) AS avg_rate, "
+      "MIN(st.rate) AS min_rate, MAX(st.rate) AS max_rate, "
+      "MAX(st.date_time) AS last_date, "
+      "(SELECT rate FROM stock_transactions WHERE item_id = st.item_id "
+      "AND supplier_id = st.supplier_id AND type = 'in' "
+      "ORDER BY date_time DESC, id DESC LIMIT 1) AS last_rate "
+      "FROM stock_transactions st "
+      "WHERE st.item_id = ? AND st.type = 'in' AND st.supplier_id IS NOT NULL "
+      "GROUP BY st.supplier_id",
+      [itemId],
+    );
+    final out = <({
+      Party supplier,
+      int purchases,
+      double totalQty,
+      double lastRate,
+      double avgRate,
+      double minRate,
+      double maxRate,
+      DateTime? lastDate
+    })>[];
+    for (final r in rows) {
+      final supplier = await getParty((r['sid'] as num).toInt());
+      if (supplier == null) continue;
+      out.add((
+        supplier: supplier,
+        purchases: (r['n'] as num).toInt(),
+        totalQty: (r['total_qty'] as num).toDouble(),
+        lastRate: (r['last_rate'] as num?)?.toDouble() ?? 0,
+        avgRate: (r['avg_rate'] as num?)?.toDouble() ?? 0,
+        minRate: (r['min_rate'] as num?)?.toDouble() ?? 0,
+        maxRate: (r['max_rate'] as num?)?.toDouble() ?? 0,
+        lastDate: r['last_date'] == null
+            ? null
+            : DateTime.parse(r['last_date'] as String),
+      ));
+    }
+    out.sort((a, b) => a.lastRate.compareTo(b.lastRate));
+    return out;
+  }
+
   /// All bank balances of a business in one query: account id → balance.
   Future<Map<int, double>> getBankBalances(int businessId) async {
     final d = await db;

@@ -9,6 +9,7 @@ import 'finished_goods_screen.dart';
 import 'production_batches_screen.dart';
 import 'production_expenses_screen.dart';
 import 'production_purchases_screen.dart';
+import 'supplier_rates_screen.dart';
 import 'production_reports_screen.dart';
 
 class _DashData {
@@ -290,6 +291,8 @@ class _ProductionHubScreenState extends State<ProductionHubScreen> {
               const SizedBox(height: 14),
               _tile(context, p.t('rawPurchases'), Icons.local_shipping,
                   const ProductionPurchasesScreen()),
+              _tile(context, p.t('supplierRates'), Icons.price_check,
+                  const SupplierRatesScreen()),
               _tile(context, p.t('prodBatches'), Icons.factory,
                   const ProductionBatchesScreen()),
               _tile(context, p.t('finishedGoods'), Icons.inventory_2,
