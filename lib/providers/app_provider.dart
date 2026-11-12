@@ -1,6 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../l10n/app_strings.dart';
+import '../services/firebase_service.dart';
+import '../utils/google_drive_service.dart';
 
 /// Global app state: language, active business, lock settings.
 class AppProvider extends ChangeNotifier {
@@ -75,6 +79,8 @@ class AppProvider extends ChangeNotifier {
   }
 
   Future<void> signOutSession() async {
+    _cloudTimer?.cancel();
+    _driveTimer?.cancel();
     _biometricAuthed = false;
     _sessionUsername = '';
     final prefs = await SharedPreferences.getInstance();
@@ -90,5 +96,51 @@ class AppProvider extends ChangeNotifier {
   void bump() {
     _tick++;
     notifyListeners();
+    _scheduleAutoSync();
+  }
+
+  // ---- Immediate cloud sync (owner's rule: as soon as an entry is
+  // saved, it must reach Firebase AND Google Drive on its own, so any
+  // other phone shows it right away and a broken phone loses nothing).
+  // bump() is the funnel every data-changing screen already calls, so
+  // the syncs are scheduled here, debounced: a burst of entries
+  // coalesces into one upload a few seconds after the last change.
+  Timer? _cloudTimer;
+  Timer? _driveTimer;
+  bool _cloudSyncRunning = false;
+  bool _driveSyncRunning = false;
+
+  void _scheduleAutoSync() {
+    if (_sessionUsername.isEmpty) return;
+    _cloudTimer?.cancel();
+    _cloudTimer = Timer(const Duration(seconds: 10), _runCloudSync);
+    _driveTimer?.cancel();
+    _driveTimer = Timer(const Duration(seconds: 45), _runDriveSync);
+  }
+
+  Future<void> _runCloudSync() async {
+    if (_cloudSyncRunning || _sessionUsername.isEmpty) return;
+    if (!FirebaseService.instance.isConfigured) return;
+    _cloudSyncRunning = true;
+    try {
+      await FirebaseService.instance
+          .syncUserData(_sessionUsername, _businessId);
+    } catch (_) {
+      // Offline or cloud hiccup: the app-open and login syncs catch up.
+    } finally {
+      _cloudSyncRunning = false;
+    }
+  }
+
+  Future<void> _runDriveSync() async {
+    if (_driveSyncRunning || _sessionUsername.isEmpty) return;
+    _driveSyncRunning = true;
+    try {
+      await GoogleDriveService.instance.uploadCurrentBackupNow();
+    } catch (_) {
+      // Not connected to Drive yet: the daily backup remains the net.
+    } finally {
+      _driveSyncRunning = false;
+    }
   }
 }
