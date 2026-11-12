@@ -24,6 +24,11 @@ class _DashData {
   final double pendingTotal;
   final int batchesToday;
   final double outputKgToday;
+  final double bankTotal;
+  final double walletTotal;
+  final double assets;
+  final double liabilities;
+  final double netWorth;
   _DashData({
     required this.opening,
     required this.cashIn,
@@ -43,6 +48,11 @@ class _DashData {
     required this.pendingTotal,
     required this.batchesToday,
     required this.outputKgToday,
+    required this.bankTotal,
+    required this.walletTotal,
+    required this.assets,
+    required this.liabilities,
+    required this.netWorth,
   });
 }
 
@@ -88,6 +98,10 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
     }
 
     final totals = await _db.getPartyTotals(bizId);
+    final bankBalances = await _db.getBankBalances(bizId);
+    final bankTotal =
+        bankBalances.values.fold<double>(0, (a, b) => a + b);
+    final walletTotal = await _db.getWalletTotal(bizId);
     var pendingCount = 0;
     var pendingTotal = 0.0;
     for (final b in await _db.getBills(bizId)) {
@@ -126,6 +140,20 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
       pendingTotal: pendingTotal,
       batchesToday: batchesToday,
       outputKgToday: outputKg,
+      bankTotal: bankTotal,
+      walletTotal: walletTotal,
+      assets: (frozen?.closing ?? live.closing) +
+          bankTotal +
+          walletTotal +
+          stockValue +
+          totals.willGet,
+      liabilities: totals.willGive,
+      netWorth: (frozen?.closing ?? live.closing) +
+          bankTotal +
+          walletTotal +
+          stockValue +
+          totals.willGet -
+          totals.willGive,
     );
   }
 
@@ -252,6 +280,22 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
                       formatRs(d.pendingTotal),
                       Icons.pending_actions,
                       AppColors.accent),
+                ]),
+                _section(p.t('financialPosition')),
+                _grid([
+                  _card(p.t('totalAssets'), formatRs(d.assets),
+                      Icons.account_balance, AppColors.green),
+                  _card(p.t('totalLiabilities'), formatRs(d.liabilities),
+                      Icons.money_off, AppColors.red),
+                  _card(p.t('netWorth'), formatRs(d.netWorth),
+                      Icons.savings,
+                      d.netWorth >= 0 ? AppColors.green : AppColors.red,
+                      valueColor:
+                          d.netWorth >= 0 ? AppColors.green : AppColors.red),
+                  _card(p.t('bankBalance'), formatRs(d.bankTotal),
+                      Icons.account_balance, AppColors.primary),
+                  _card(p.t('walletBalance'), formatRs(d.walletTotal),
+                      Icons.phone_android, AppColors.accent),
                 ]),
                 _section(p.t('production')),
                 _grid([

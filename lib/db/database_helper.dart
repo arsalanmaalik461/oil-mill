@@ -1295,6 +1295,19 @@ class DatabaseHelper {
     return (r.first['s'] as num).toDouble();
   }
 
+  /// Total DigiCash wallet balance across all channels (same rule
+  /// as getWalletBalance: 'in' adds, everything else except the
+  /// non-movement 'request' subtracts).
+  Future<double> getWalletTotal(int businessId) async {
+    final d = await db;
+    final r = await d.rawQuery(
+      "SELECT COALESCE(SUM(CASE WHEN type='in' THEN amount ELSE -amount END),0) AS s "
+      'FROM wallet_transactions WHERE business_id = ? AND type != ?',
+      [businessId, 'request'],
+    );
+    return (r.first['s'] as num).toDouble();
+  }
+
   // ---------------- QR Payments ----------------
   Future<int> insertQrPayment(QrPayment q) async =>
       (await db).insert('qr_payments', q.toMap());
