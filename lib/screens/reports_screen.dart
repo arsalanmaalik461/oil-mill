@@ -7,6 +7,7 @@ import '../theme/app_theme.dart';
 import '../utils/helpers.dart';
 import '../utils/pdf_service.dart';
 import 'roznamcha_screen.dart';
+import 'profit_loss_screen.dart';
 
 class _ReportData {
   final Business business;
@@ -395,6 +396,34 @@ class _ReportsScreenState extends State<ReportsScreen> {
                   onTap: () => Navigator.push(
                     context,
                     MaterialPageRoute(builder: (_) => const RoznamchaScreen()),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 6),
+              Card(
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  side: BorderSide(color: AppColors.primary.withValues(alpha: 0.3)),
+                ),
+                child: ListTile(
+                  leading: const CircleAvatar(
+                    backgroundColor: AppColors.green,
+                    child: Icon(Icons.trending_up, color: Colors.white),
+                  ),
+                  title: Text(
+                    p.t('profitLoss'),
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                  ),
+                  subtitle: Text(
+                    p.isUrdu
+                        ? 'فروخت، لاگت، اخراجات اور خالص منافع — ایک بیان'
+                        : 'Sales, cost, expenses and net profit — one statement',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  trailing: const Icon(Icons.arrow_forward_ios, size: 16, color: AppColors.primary),
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const ProfitLossScreen()),
                   ),
                 ),
               ),

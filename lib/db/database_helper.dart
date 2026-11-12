@@ -1854,6 +1854,25 @@ class DatabaseHelper {
     );
   }
 
+  /// Operating-expense totals grouped by category for a period
+  /// (the P&L statement's breakdown). Categories are free text, so
+  /// they are trimmed; blank becomes 'Other'. Sorted high to low.
+  Future<List<({String category, double total})>> getExpenseCategoryTotals(
+      int businessId, DateTime start, DateTime end) async {
+    final byCategory = <String, double>{};
+    for (final e in await getExpenses(businessId)) {
+      if (e.kind != 'operating') continue;
+      if (e.dateTime.isBefore(start) || !e.dateTime.isBefore(end)) continue;
+      final key = e.category.trim().isEmpty ? 'Other' : e.category.trim();
+      byCategory[key] = (byCategory[key] ?? 0) + e.amount;
+    }
+    final out = byCategory.entries
+        .map((e) => (category: e.key, total: e.value))
+        .toList()
+      ..sort((a, b) => b.total.compareTo(a.total));
+    return out;
+  }
+
   /// Batch-wise profitability (Phase 5), computed by a FIFO replay of
   /// the stock book: every stock-IN opens a lot (production lots are
   /// recognised by their 'Production batch #N' note and carry the
