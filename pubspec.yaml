@@ -34,6 +34,7 @@ dependencies:
   firebase_auth: ^5.2.0
   cloud_firestore: ^5.4.0
   flutter_local_notifications: ^18.0.1
+  excel: ^4.0.6
 
 dev_dependencies:
   flutter_test:
@@ -55,6 +56,5 @@ flutter:
     - assets/icon/icon.png
 
 dependency_overrides:
-  archive: ^4.6.0
   sqflite_android: 2.4.1
 

@@ -19,6 +19,7 @@ import '../utils/google_drive_service.dart';
 import '../utils/helpers.dart';
 import '../utils/pdf_service.dart';
 import '../services/firebase_service.dart';
+import 'data_export_screen.dart';
 
 String _hashPin(String pin) => sha256.convert(utf8.encode(pin)).toString();
 
@@ -1113,6 +1114,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   leading: const Icon(Icons.upload_file, color: AppColors.primary),
                   title: Text(p.t('exportBackup')),
                   onTap: _exportBackup,
+                ),
+                ListTile(
+                  leading: const Icon(Icons.table_chart_outlined,
+                      color: AppColors.primary),
+                  title: Text(p.t('dataExport')),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => const DataExportScreen())),
                 ),
                 ListTile(
                   leading: const Icon(Icons.download, color: AppColors.primary),
