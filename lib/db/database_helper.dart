@@ -237,6 +237,56 @@ class DatabaseHelper {
   Future<void> updateParty(Party party) async =>
       (await db).update('parties', party.toMap(), where: 'id = ?', whereArgs: [party.id]);
 
+  /// Normalized match key for contact names: lowercase, punctuation
+  /// removed, single spaces — so 'Kashif  Punjab' and 'kashif punjab'
+  /// match the same contact.
+  static String contactNameKey(String s) => s
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^a-z0-9\u0600-\u06FF]+'), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+
+  Future<int> countPartyTransactions(int partyId) async {
+    final d = await db;
+    final r = await d.rawQuery(
+        'SELECT COUNT(*) AS c FROM party_transactions WHERE party_id = ?',
+        [partyId]);
+    return (r.first['c'] as num).toInt();
+  }
+
+  /// Parties of [businessId] whose phone is empty — the ones a
+  /// contacts match can fill (imported statement parties arrive
+  /// without any numbers).
+  Future<List<Party>> getPartiesMissingPhone(int businessId) async {
+    final d = await db;
+    final rows = await d.query('parties',
+        where:
+            "business_id = ? AND deleted = 0 AND TRIM(COALESCE(phone, '')) = ''",
+        whereArgs: [businessId],
+        orderBy: 'name');
+    return rows.map(Party.fromMap).toList();
+  }
+
+  /// Fills empty party phones from a contacts map (normalized name
+  /// key → phone). A number that already exists is never overwritten.
+  /// Returns how many parties got a number.
+  Future<int> fillPartyPhonesFromContacts(
+      int businessId, Map<String, String> phoneByNameKey) async {
+    if (phoneByNameKey.isEmpty) return 0;
+    final missing = await getPartiesMissingPhone(businessId);
+    final d = await db;
+    var filled = 0;
+    for (final party in missing) {
+      final phone = phoneByNameKey[contactNameKey(party.name)];
+      if (phone != null && phone.trim().isNotEmpty) {
+        await d.update('parties', {'phone': phone.trim()},
+            where: 'id = ?', whereArgs: [party.id]);
+        filled++;
+      }
+    }
+    return filled;
+  }
+
   Future<void> setPartyDeleted(int id, bool deleted) async => (await db).update(
         'parties', {'deleted': deleted ? 1 : 0}, where: 'id = ?', whereArgs: [id]);
 

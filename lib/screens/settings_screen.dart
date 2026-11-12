@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter_contacts/flutter_contacts.dart';
 import 'package:flutter/material.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:intl/intl.dart';
@@ -593,6 +594,75 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  /// One-tap fix for imported parties whose numbers never came with
+  /// the statements: match parties with an empty phone against the
+  /// phone's contacts BY NAME and fill the numbers in (with a
+  /// confirmation first). Existing numbers are never overwritten,
+  /// and a name with two different numbers in contacts is skipped.
+  Future<void> _fillPhonesFromContacts(AppProvider p) async {
+    try {
+      final granted =
+          await FlutterContacts.requestPermission(readonly: true);
+      if (!granted) {
+        if (mounted) showSnack(context, p.t('contactsPermissionDenied'));
+        return;
+      }
+      final contacts =
+          await FlutterContacts.getContacts(withProperties: true);
+      final byKey = <String, String>{};
+      final ambiguous = <String>{};
+      for (final c in contacts) {
+        final key = DatabaseHelper.contactNameKey(c.displayName);
+        if (key.isEmpty) continue;
+        for (final ph in c.phones) {
+          final num = ph.number.replaceAll(RegExp(r'[\s-]'), '');
+          if (num.isEmpty) continue;
+          final prev = byKey[key];
+          if (prev == null) {
+            byKey[key] = num;
+          } else if (prev != num) {
+            ambiguous.add(key);
+          }
+        }
+      }
+      byKey.removeWhere((k, _) => ambiguous.contains(k));
+      final missing = await _db.getPartiesMissingPhone(p.businessId);
+      final matchable = missing
+          .where((x) =>
+              byKey.containsKey(DatabaseHelper.contactNameKey(x.name)))
+          .toList();
+      if (!mounted) return;
+      if (matchable.isEmpty) {
+        showSnack(context, p.t('noContactMatches'));
+        return;
+      }
+      final go = await showDialog<bool>(
+        context: context,
+        builder: (c) => AlertDialog(
+          title: Text(p.t('fillPhonesFromContacts')),
+          content: Text('${p.t('fillPhonesFound')}: ${matchable.length}\n\n'
+              '${matchable.take(5).map((x) => x.name).join('\n')}'),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(c, false),
+                child: Text(p.t('cancel'))),
+            TextButton(
+                onPressed: () => Navigator.pop(c, true),
+                child: Text(p.t('fillNumbers'))),
+          ],
+        ),
+      );
+      if (go != true) return;
+      final filled =
+          await _db.fillPartyPhonesFromContacts(p.businessId, byKey);
+      if (!mounted) return;
+      p.bump();
+      showSnack(context, '${p.t('contactsFilled')}: $filled');
+    } catch (e) {
+      if (mounted) showSnack(context, '${p.t('importFailed')}: $e');
+    }
+  }
+
   Future<void> _uploadBackupJsonToDrive(AppProvider p) async {
     if (_googleBusy) return;
     setState(() => _googleBusy = true);
@@ -1108,6 +1178,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           )
                         : null,
                     onTap: _googleBusy ? null : () => _uploadBackupJsonToDrive(p),
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.contact_phone_outlined,
+                        color: AppColors.primary),
+                    title: Text(p.t('fillPhonesFromContacts')),
+                    subtitle: Text(p.t('fillPhonesFromContactsSub')),
+                    onTap: () => _fillPhonesFromContacts(p),
                   ),
                   SwitchListTile(
                     secondary: const Icon(Icons.alarm, color: AppColors.primary),
