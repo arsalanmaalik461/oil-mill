@@ -233,6 +233,104 @@ class _PartyDetailScreenState extends State<PartyDetailScreen> {
     context.read<AppProvider>().bump();
   }
 
+  /// Settle: close this party's outstanding balance to zero with a
+  /// real payment plus a forgiven adjustment (discount) for the rest.
+  Future<void> _settle(_DetailData data) async {
+    final p = context.read<AppProvider>();
+    final balance = data.balance;
+    if (balance <= 0) {
+      showSnack(context, p.t('noData'));
+      return;
+    }
+    final paidC = TextEditingController(
+        text: balance == balance.roundToDouble()
+            ? balance.toInt().toString()
+            : balance.toString());
+    final reasonC = TextEditingController();
+    var method = 'cash';
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setD) {
+          final paid = double.tryParse(paidC.text.trim()) ?? 0;
+          final adj = balance - paid;
+          return AlertDialog(
+            title: Text(p.t('settleAccount')),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('${p.t('balance')}: ${formatRs(balance)}',
+                      style: const TextStyle(
+                          fontSize: 16, fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: paidC,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    decoration: InputDecoration(labelText: p.t('paid')),
+                    onChanged: (_) => setD(() {}),
+                  ),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      for (final m in ['cash', 'bank', 'jazzcash', 'easypaisa'])
+                        ChoiceChip(
+                          label: Text(p.t(m)),
+                          selected: method == m,
+                          onSelected: (_) => setD(() => method = m),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                      '${p.t('adjustment')}: ${formatRs(adj < 0 ? 0 : adj)}',
+                      style: const TextStyle(
+                          fontSize: 14, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: reasonC,
+                    decoration: InputDecoration(labelText: p.t('note')),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: Text(p.t('cancel'))),
+              ElevatedButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: Text(p.t('settleAccount'))),
+            ],
+          );
+        },
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final paid = double.tryParse(paidC.text.trim()) ?? 0;
+    if (paid < 0 || paid > balance) {
+      showSnack(context, p.t('invalidAmount'));
+      return;
+    }
+    await DatabaseHelper.instance.settlePartyPayment(
+      partyId: widget.party.id!,
+      paidAmount: paid,
+      adjustmentAmount: balance - paid,
+      method: method,
+      dateTime: DateTime.now(),
+      reason: reasonC.text.trim(),
+    );
+    if (!mounted) return;
+    p.bump();
+    showSnack(context, p.t('savedSuccessfully'));
+    setState(() {
+      _future = _load();
+    });
+  }
+
   Future<void> _deleteParty() async {
     final p = context.read<AppProvider>();
     final ok = await confirmDelete(context, p.t('confirmDelete'));
@@ -387,6 +485,9 @@ class _PartyDetailScreenState extends State<PartyDetailScreen> {
                     _exportReport(snap.data!, snap.data!.balance);
                   }
                   if (v == 'delete') _deleteParty();
+                  if (v == 'settle' && snap.data != null) {
+                    _settle(snap.data!);
+                  }
                 },
                 itemBuilder: (c) => [
                   PopupMenuItem(
@@ -406,6 +507,8 @@ class _PartyDetailScreenState extends State<PartyDetailScreen> {
                       value: 'card', child: Text(p.t('businessCard'))),
                   PopupMenuItem(
                       value: 'report', child: Text(p.t('reportLabel'))),
+                  PopupMenuItem(
+                      value: 'settle', child: Text(p.t('settleAccount'))),
                   PopupMenuItem(value: 'delete', child: Text(p.t('delete'))),
                 ],
               );

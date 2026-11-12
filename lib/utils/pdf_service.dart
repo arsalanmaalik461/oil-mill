@@ -212,7 +212,7 @@ Future<void> shareLedgerPdf({
       _stmtDate.format(t.dateTime),
       t.note.isNotEmpty ? t.note : (t.type == 'udhaar' ? 'You Gave' : 'You Got'),
       t.type == 'udhaar' ? _num(t.amount) : '',
-      t.type == 'wasool' ? _num(t.amount) : '',
+      (t.type == 'wasool' || t.type == 'adjustment') ? _num(t.amount) : '',
       _balText(running),
     ]);
   }
@@ -286,7 +286,7 @@ Future<void> shareStatementPdf({
       names[t.partyId] ?? '',
       t.note.isNotEmpty ? t.note : (t.type == 'udhaar' ? 'You Gave' : 'You Got'),
       t.type == 'udhaar' ? _num(t.amount) : '',
-      t.type == 'wasool' ? _num(t.amount) : '',
+      (t.type == 'wasool' || t.type == 'adjustment') ? _num(t.amount) : '',
       _balText(running),
     ]);
   }

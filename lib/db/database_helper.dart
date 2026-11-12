@@ -416,7 +416,9 @@ class DatabaseHelper {
     final d = await db;
     return d.transaction((txn) async {
       final id = await txn.insert('party_transactions', t.toMap());
-      if (t.method == 'cash') {
+      // 'adjustment' entries (settlement discounts/write-offs) reduce
+      // the balance like a wasool but are NOT money — never post cash.
+      if (t.method == 'cash' && t.type != 'adjustment') {
         final biz = await _businessIdOfParty(txn, t.partyId);
         if (biz != null) {
           await _postLinkedCash(txn,
@@ -432,6 +434,64 @@ class DatabaseHelper {
         }
       }
       return id;
+    });
+  }
+
+  /// Settles a party's outstanding (positive) balance to exactly
+  /// zero in one transaction: a real payment ([paidAmount], a wasool
+  /// with its linked cash when the method is cash) plus an
+  /// 'adjustment' entry for the forgiven remainder (discount /
+  /// write-off — reduces the balance but is never counted as cash).
+  /// [paidAmount] + [adjustmentAmount] must equal the balance.
+  Future<void> settlePartyPayment({
+    required int partyId,
+    required double paidAmount,
+    required double adjustmentAmount,
+    String method = 'cash',
+    required DateTime dateTime,
+    String reason = '',
+  }) async {
+    final d = await db;
+    await d.transaction((txn) async {
+      final biz = await _businessIdOfParty(txn, partyId);
+      if (biz == null) throw StateError('party-not-found');
+      if (paidAmount > 0) {
+        final wid = await txn.insert('party_transactions', {
+          'party_id': partyId,
+          'type': 'wasool',
+          'amount': paidAmount,
+          'note': reason.isEmpty ? 'Settlement' : 'Settlement — $reason',
+          'date_time': dateTime.toIso8601String(),
+          'attachment_path': null,
+          'method': method,
+          'bill_id': null,
+        });
+        if (method == 'cash') {
+          await _postLinkedCash(txn,
+              businessId: biz,
+              type: 'in',
+              amount: paidAmount,
+              note: 'Settlement',
+              partyId: partyId,
+              dateTime: dateTime,
+              sourceTable: 'party_transactions',
+              sourceId: wid);
+        }
+      }
+      if (adjustmentAmount > 0) {
+        await txn.insert('party_transactions', {
+          'party_id': partyId,
+          'type': 'adjustment',
+          'amount': adjustmentAmount,
+          'note': reason.isEmpty
+              ? 'Settlement adjustment'
+              : 'Settlement adjustment — $reason',
+          'date_time': dateTime.toIso8601String(),
+          'attachment_path': null,
+          'method': method,
+          'bill_id': null,
+        });
+      }
     });
   }
 
