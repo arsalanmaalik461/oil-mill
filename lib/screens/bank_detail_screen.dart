@@ -131,6 +131,7 @@ class _BankDetailScreenState extends State<BankDetailScreen> {
       note: note,
       dateTime: when,
     ));
+    p.bump(); // schedule cloud sync for this save
     if (!mounted) return;
     showSnack(context, p.t('savedSuccessfully'));
     _load();
@@ -141,6 +142,7 @@ class _BankDetailScreenState extends State<BankDetailScreen> {
     final ok = await confirmDelete(context, p.t('confirmDelete'));
     if (!ok || !mounted) return;
     await _db.deleteBankTransaction(t.id!);
+    p.bump(); // schedule cloud sync for this delete
     _load();
   }
 
