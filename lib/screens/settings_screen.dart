@@ -466,16 +466,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // ---------------- Google Drive ----------------
 
   /// Restores an existing Google session (silently) so the section can
-  /// show the connected state. Never throws — without the one-time
-  /// setup (see README) there is simply no session to restore.
+  /// show the connected state. The restore is attempted
+  /// UNCONDITIONALLY — gating it behind isSignedIn() meant a second
+  /// phone, where the plugin has no cached session yet, never even
+  /// tried, so an account that had already authorized the app showed
+  /// as "not connected" there. The status below then reflects the
+  /// live session after a real restore attempt, not a stale
+  /// per-device flag. Never throws — without the one-time setup (see
+  /// README) there is simply no session to restore.
   Future<void> _refreshGoogle() async {
-    try {
-      if (await _drive.isSignedIn()) {
-        await _drive.googleSignIn.signInSilently();
-      }
-    } catch (_) {
-      // No session / setup missing: stay in the "not connected" state.
-    }
+    await _drive.restoreSession();
     if (!mounted) return;
     setState(() => _googleAccount = _drive.currentAccount);
   }

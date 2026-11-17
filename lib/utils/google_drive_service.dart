@@ -42,6 +42,27 @@ class GoogleDriveService {
   /// Whether a user is currently signed in.
   Future<bool> isSignedIn() => _googleSignIn.isSignedIn();
 
+  /// Attempts to restore a previously granted Google session with NO
+  /// UI: succeeds when the Google account on this device has already
+  /// authorized the app — the authorization belongs to the account,
+  /// not to the phone it was first granted on. Never throws and never
+  /// falls back to the interactive flow, so it is safe for status
+  /// checks and background paths.
+  ///
+  /// Callers must use this rather than gating a silent sign-in behind
+  /// [isSignedIn]: that check only reflects the plugin's cached
+  /// session ON THIS DEVICE, so on a second phone it is false exactly
+  /// when a restore should be attempted, and the account then wrongly
+  /// shows as "not connected".
+  Future<GoogleSignInAccount?> restoreSession() async {
+    try {
+      return await _googleSignIn.signInSilently();
+    } catch (_) {
+      // No restorable session / setup missing: simply not connected.
+      return null;
+    }
+  }
+
   /// Signs in: tries a silent sign-in first (restores an existing
   /// session), then falls back to the interactive flow.
   Future<GoogleSignInAccount?> signIn() async {
