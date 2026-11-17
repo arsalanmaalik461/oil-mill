@@ -22,4 +22,17 @@ void main() {
     expect(account, isNull);
     expect(GoogleDriveService.instance.currentAccount, isNull);
   });
+
+  test('changeAccount never throws and reports the true signed-out '
+      'state when no sign-in can complete', () async {
+    // Settings' Change Google Account flow: sign out, then the
+    // interactive chooser. With no platform implementation the switch
+    // cannot complete — it must surface as null (Settings then
+    // re-reads the real state), never as a throw, and no account or
+    // email may be reported afterwards.
+    final account = await GoogleDriveService.instance.changeAccount();
+    expect(account, isNull);
+    expect(GoogleDriveService.instance.currentAccount, isNull);
+    expect(GoogleDriveService.instance.currentAccountEmail, isNull);
+  });
 }

@@ -39,6 +39,31 @@ class GoogleDriveService {
   /// The currently signed-in account, or null when signed out.
   GoogleSignInAccount? get currentAccount => _googleSignIn.currentUser;
 
+  /// Email of the currently signed-in account, or null when signed
+  /// out — what Settings shows so the user can see WHICH Google
+  /// account this phone is connected to.
+  String? get currentAccountEmail => _googleSignIn.currentUser?.email;
+
+  /// Switches to a different Google account: signs the current one
+  /// out, then runs the INTERACTIVE sign-in so the user gets the
+  /// account chooser. The silent pre-attempt in [signIn] is
+  /// deliberately skipped — after a sign-out it could silently
+  /// re-select the same account, defeating the switch. Returns the
+  /// newly signed-in account, or null when the user cancels or the
+  /// switch fails. Never throws.
+  Future<GoogleSignInAccount?> changeAccount() async {
+    try {
+      await _googleSignIn.signOut();
+    } catch (_) {
+      // Even if sign-out errors, still offer the account chooser.
+    }
+    try {
+      return await _googleSignIn.signIn();
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Whether a user is currently signed in.
   Future<bool> isSignedIn() => _googleSignIn.isSignedIn();
 

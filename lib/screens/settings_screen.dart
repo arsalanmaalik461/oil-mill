@@ -552,6 +552,40 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  /// Change-account button: sign the current Google account out and
+  /// run the interactive sign-in so the user can pick a DIFFERENT
+  /// account; the ledger PDF then goes to the new account's Drive,
+  /// exactly like a fresh connect. If the user cancels the chooser,
+  /// the section re-reads whoever is actually signed in so the shown
+  /// state (connected account email / connect option) stays true.
+  Future<void> _changeGoogleAccount(AppProvider p) async {
+    final cur = _current(_businesses, p.businessId);
+    if (cur?.id == null || _googleBusy) return;
+    setState(() => _googleBusy = true);
+    try {
+      final account = await _drive.changeAccount();
+      if (!mounted) return;
+      if (account == null) {
+        await _refreshGoogle();
+        if (!mounted) return;
+        showSnack(
+            context, '${p.t('googleSignInFailed')} — ${p.t('googleSetupNote')}');
+        return;
+      }
+      setState(() => _googleAccount = account);
+      try {
+        await _doUploadLedger(cur!);
+        if (!mounted) return;
+        showSnack(context, p.t('driveUploadDone'));
+      } catch (_) {
+        if (!mounted) return;
+        showSnack(context, p.t('driveUploadFailed'));
+      }
+    } finally {
+      if (mounted) setState(() => _googleBusy = false);
+    }
+  }
+
   Future<void> _disconnectGoogle() async {
     try {
       await _drive.signOut();
@@ -1162,6 +1196,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         const Icon(Icons.cloud_done, color: AppColors.primary),
                     title: Text(p.t('googleConnected')),
                     subtitle: Text(_googleAccount!.email),
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.switch_account,
+                        color: AppColors.primary),
+                    title: Text(p.t('changeGoogleAccount')),
+                    subtitle: _googleBusy ? Text(p.t('uploading')) : null,
+                    trailing: _googleBusy
+                        ? const SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : null,
+                    onTap: _googleBusy ? null : () => _changeGoogleAccount(p),
                   ),
                   ListTile(
                     leading:
