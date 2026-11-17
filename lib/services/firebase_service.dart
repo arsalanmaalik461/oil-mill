@@ -32,6 +32,54 @@ class FirebaseService {
     return 'none';
   }
 
+  /// Content fingerprint of one business's full export (the shape
+  /// produced by exportBusinessData): a [tableSyncHash] over every
+  /// table's combined hash. Two exports holding the same rows — in
+  /// any order — fingerprint equal; ANY value change (e.g. a phone
+  /// number filled in) changes it, even though the row COUNT does
+  /// not move. Built on the delta-sync row hashes, so the cloud-only
+  /// keys (`_sync_hash`, `attachment_drive_id`) never affect it.
+  static String businessFingerprint(Map<String, dynamic> data) {
+    final tables = <String, String>{};
+    for (final e in data.entries) {
+      if (e.key == 'app' || e.key == 'version') continue;
+      final rows = (e.value as List)
+          .map((r) => Map<String, dynamic>.from(r as Map))
+          .toList();
+      final hashes = <String, String>{};
+      for (var i = 0; i < rows.length; i++) {
+        hashes[rowDocId(rows[i], i)] = rowSyncHash(rows[i]);
+      }
+      tables[e.key] = tableSyncHash(hashes);
+    }
+    return tableSyncHash(tables);
+  }
+
+  /// The login decision when content fingerprints are known. Row
+  /// counts cannot see value-only changes — filling in party phone
+  /// numbers on one phone adds no rows — so without fingerprints the
+  /// second phone kept its stale copy and its uploads overwrote the
+  /// filled numbers in the cloud. Rule: if the cloud fingerprint has
+  /// moved since this device's last sync (another device synced)
+  /// AND this device's local content is exactly what it last synced
+  /// (nothing unsynced to lose), restore the cloud copy. In every
+  /// other case the richer-side-wins count rule decides, unchanged.
+  static String loginSyncDecisionV2({
+    required int localRows,
+    required int cloudRows,
+    required String? localFingerprint,
+    required String? cloudFingerprint,
+    required String? lastSyncedFingerprint,
+  }) {
+    if (cloudFingerprint != null &&
+        lastSyncedFingerprint != null &&
+        cloudFingerprint != lastSyncedFingerprint &&
+        localFingerprint == lastSyncedFingerprint) {
+      return 'restore';
+    }
+    return loginSyncDecision(localRows, cloudRows);
+  }
+
   FirebaseService._();
   static final FirebaseService instance = FirebaseService._();
 
@@ -837,26 +885,60 @@ extension FirebaseUsers on FirebaseService {
       await prefs.setString(hashKey, combined);
       count += rows.length;
     }
+    // Record WHAT was synced, not just how much: the content
+    // fingerprint lets other devices detect value-only changes
+    // (filled-in phone numbers move no row counts) at login time.
+    final fingerprint = FirebaseService.businessFingerprint(data);
     await _users.doc(username).set({
       'last_sync_at': FieldValue.serverTimestamp(),
       'last_sync_count': count,
       'last_sync_device': myDevice,
+      'last_sync_fingerprint': fingerprint,
     }, SetOptions(merge: true));
     await prefs.setString(
         'last_sync_at_$username', DateTime.now().toIso8601String());
+    await prefs.setString('last_sync_fp_$username', fingerprint);
     return count;
   }
 
   /// Makes the account's data simply BE in the app after sign-in —
   /// no manual sync, no file import (owner's requirement). A richer
   /// cloud restores down to this device before sign-in completes; a
-  /// richer (or equal) local copy uploads in the background. Returns
+  /// richer (or equal) local copy uploads in the background. Content
+  /// fingerprints (see [loginSyncDecisionV2]) additionally catch
+  /// value-only changes another device synced — e.g. party phone
+  /// numbers filled in there — which row counts cannot see. Returns
   /// what happened: 'restored' | 'uploading' | 'none'.
   Future<String> syncOnLogin(String username, int businessId) async {
     if (!isConfigured) return 'none';
     final local = await DatabaseHelper.instance.totalBusinessRows(businessId);
     final cloud = await cloudRowCount(username);
-    switch (FirebaseService.loginSyncDecision(local, cloud)) {
+    String? cloudFp;
+    String? localFp;
+    String? lastFp;
+    try {
+      final doc = await _users.doc(username).get();
+      cloudFp = doc.data()?['last_sync_fingerprint'] as String?;
+    } catch (_) {
+      // No fingerprint recorded (older build / read failure): the
+      // count rule below still applies.
+    }
+    try {
+      final data =
+          await DatabaseHelper.instance.exportBusinessData(businessId);
+      localFp = FirebaseService.businessFingerprint(data);
+    } catch (_) {}
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      lastFp = prefs.getString('last_sync_fp_$username');
+    } catch (_) {}
+    switch (FirebaseService.loginSyncDecisionV2(
+      localRows: local,
+      cloudRows: cloud,
+      localFingerprint: localFp,
+      cloudFingerprint: cloudFp,
+      lastSyncedFingerprint: lastFp,
+    )) {
       case 'restore':
         await restoreUserData(username, businessId);
         return 'restored';
@@ -916,6 +998,12 @@ extension FirebaseUsers on FirebaseService {
         in prefs.getKeys().where((k) => k.startsWith(prefix)).toList()) {
       await prefs.remove(key);
     }
+    // This device now holds exactly the cloud content just
+    // downloaded: record its fingerprint as the last-synced state,
+    // so a later login can tell "cloud moved on another device"
+    // apart from "I have unsynced changes of my own".
+    await prefs.setString(
+        'last_sync_fp_$username', FirebaseService.businessFingerprint(data));
     return count;
   }
 }

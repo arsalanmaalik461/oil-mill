@@ -58,5 +58,14 @@ void main() {
     expect(phoneOf('Rehan'), '03001112223',
         reason: 'existing number never overwritten');
     expect(await db.getPartiesMissingPhone(1), isEmpty);
+
+    // The WhatsApp Reminders path itself: the due list drops parties
+    // whose phone is empty, so a filled party that owes money must
+    // appear there WITH its new number, ready to send to.
+    final due = await db.getPartiesDueForReminder(1);
+    final dueKashif = due.where((x) => x.name == 'Kashif Punjab').toList();
+    expect(dueKashif, hasLength(1),
+        reason: 'filled + owing party is due for a reminder');
+    expect(dueKashif.single.phone, '03119998887');
   });
 }
