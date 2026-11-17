@@ -170,6 +170,7 @@ class _CreateBillScreenState extends State<CreateBillScreen> {
     } else {
       await _db.createBill(businessId: bizId, bill: bill, items: items);
     }
+    p.bump(); // schedule cloud sync for this save
     if (!mounted) return;
     showSnack(context, p.t('savedSuccessfully'));
     Navigator.pop(context, true);
