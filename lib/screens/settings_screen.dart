@@ -53,6 +53,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String? _backupStatus;
   String? _backupWhen;
   bool _accountBusy = false;
+  AppUserRecord? _accountUser;
   bool _syncBusy = false;
   bool _restoreBusy = false;
   final _firebase = FirebaseService.instance;
@@ -100,6 +101,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _filled = true;
       }
     });
+    final session = context.read<AppProvider>().sessionUsername;
+    if (session.isNotEmpty) {
+      final rec = await _firebase.cachedUser(session);
+      if (mounted) setState(() => _accountUser = rec);
+    }
     _refreshGoogle();
   }
 
@@ -926,6 +932,77 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  /// Owner self-edit: the signed-in user updates their OWN email /
+  /// phone. Saved to their app_users doc (so signing in with the new
+  /// email or phone works) and to this device's cached record.
+  Future<void> _editOwnContact(AppProvider p) async {
+    if (!_firebase.isConfigured) {
+      showSnack(context, p.t('firebaseNotReady'));
+      return;
+    }
+    final emailC = TextEditingController(text: _accountUser?.email ?? '');
+    final phoneC = TextEditingController(text: _accountUser?.phone ?? '');
+    final emailLabel = p.isUrdu ? 'ای میل' : 'Email';
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: Text(p.t('editContact')),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: emailC,
+              keyboardType: TextInputType.emailAddress,
+              autocorrect: false,
+              decoration: InputDecoration(labelText: emailLabel),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: phoneC,
+              keyboardType: TextInputType.phone,
+              decoration: InputDecoration(labelText: p.t('phone')),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(c, false),
+              child: Text(p.t('cancel'))),
+          FilledButton(
+              onPressed: () => Navigator.pop(c, true),
+              child: Text(p.t('save'))),
+        ],
+      ),
+    );
+    final email = emailC.text;
+    final phone = phoneC.text;
+    emailC.dispose();
+    phoneC.dispose();
+    if (ok != true || !mounted) return;
+    final err = FirebaseService.validateContact(email: email, phone: phone);
+    if (err != null) {
+      showSnack(
+          context, p.t(err == 'invalid-email' ? 'invalidEmail' : 'invalidPhone'));
+      return;
+    }
+    try {
+      await _firebase.updateOwnContact(p.sessionUsername,
+          email: email, phone: phone);
+      if (!mounted) return;
+      setState(() {
+        _accountUser = AppUserRecord(
+          username: p.sessionUsername,
+          businessName: _accountUser?.businessName ?? '',
+          email: email.trim(),
+          phone: phone.trim(),
+        );
+      });
+      showSnack(context, p.t('savedSuccessfully'));
+    } catch (e) {
+      if (mounted) showSnack(context, '$e');
+    }
+  }
+
   /// Change-password dialog for the signed-in app user. The old
   /// password is verified against the Firebase app_users record.
   Future<void> _changeAccountPassword(AppProvider p) async {
@@ -1106,6 +1183,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     title: Text(p.t('changePassword')),
                     onTap:
                         _accountBusy ? null : () => _changeAccountPassword(p),
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.contact_mail,
+                        color: AppColors.primary),
+                    title: Text(p.t('editContact')),
+                    subtitle: _accountUser != null &&
+                            _accountUser!.email.isNotEmpty
+                        ? Text(_accountUser!.email)
+                        : null,
+                    onTap: _accountBusy ? null : () => _editOwnContact(p),
                   ),
                   ListTile(
                     leading: const Icon(Icons.cloud_upload,

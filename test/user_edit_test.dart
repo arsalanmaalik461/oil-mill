@@ -59,4 +59,34 @@ void main() {
           isNull);
     });
   });
+
+  group('validateContact (owner self-edit, Requirement 6)', () {
+    test('a valid email + phone passes', () {
+      expect(
+          FirebaseService.validateContact(
+              email: 'nadeem.smd@gmail.com', phone: '0300-1234567'),
+          isNull);
+    });
+    test('email must be non-empty and contain @', () {
+      expect(
+          FirebaseService.validateContact(email: '  ', phone: '03001234567'),
+          'invalid-email');
+      expect(
+          FirebaseService.validateContact(
+              email: 'no-at-sign', phone: '03001234567'),
+          'invalid-email');
+    });
+    test('phone must carry at least 7 digits', () {
+      expect(
+          FirebaseService.validateContact(email: 'a@b.com', phone: '0300'),
+          'invalid-phone');
+      expect(
+          FirebaseService.validateContact(email: 'a@b.com', phone: '1234567'),
+          isNull);
+    });
+    test('email is reported before phone when both are wrong', () {
+      expect(FirebaseService.validateContact(email: '', phone: ''),
+          'invalid-email');
+    });
+  });
 }

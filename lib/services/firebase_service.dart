@@ -59,6 +59,20 @@ class FirebaseService {
     return null;
   }
 
+  /// Light contact validation for the owner self-edit form (Settings
+  /// > Account): the email must be non-empty and contain '@'; the
+  /// phone must carry at least 7 digits (spaces/dashes ignored).
+  /// Returns 'invalid-email' | 'invalid-phone' | null.
+  static String? validateContact(
+      {required String email, required String phone}) {
+    final e = email.trim();
+    if (e.isEmpty || !e.contains('@')) return 'invalid-email';
+    if (phone.replaceAll(RegExp(r'\D'), '').length < 7) {
+      return 'invalid-phone';
+    }
+    return null;
+  }
+
   /// Content fingerprint of one business's full export (the shape
   /// produced by exportBusinessData): a [tableSyncHash] over every
   /// table's combined hash. Two exports holding the same rows — in
@@ -711,6 +725,46 @@ extension FirebaseUsers on FirebaseService {
     if (prefs.getString('last_login_username') == oldName) {
       await prefs.setString('last_login_username', newName);
     }
+  }
+
+  /// Updates the signed-in user's OWN email/phone on their app_users
+  /// doc — sign-in by email/phone reads these fields, so the new
+  /// values work at the next login — and refreshes this device's
+  /// cached copy of the record (offline login, Settings account row).
+  Future<void> updateOwnContact(String username,
+      {required String email, required String phone}) async {
+    if (!isConfigured) throw StateError('firebase-not-configured');
+    final uname = FirebaseService.normalizeUsername(username);
+    await _users.doc(uname).update({
+      'email': email.trim(),
+      'phone': phone.trim(),
+    });
+    final cached = await _cachedUsers();
+    if (cached.containsKey(uname)) {
+      final m = Map<String, dynamic>.from(cached[uname] as Map);
+      m['email'] = email.trim();
+      m['phone'] = phone.trim();
+      cached[uname] = m;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('cached_users', jsonEncode(cached));
+    }
+  }
+
+  /// This device's cached record for [username] from their last
+  /// online sign-in here (email/phone for display and prefill), or
+  /// null when they were never cached on this device.
+  Future<AppUserRecord?> cachedUser(String username) async {
+    final uname = FirebaseService.normalizeUsername(username);
+    final cached = await _cachedUsers();
+    final v = cached[uname];
+    if (v == null) return null;
+    final m = Map<String, dynamic>.from(v as Map);
+    return AppUserRecord(
+      username: uname,
+      businessName: (m['business_name'] as String?) ?? '',
+      email: (m['email'] as String?) ?? '',
+      phone: (m['phone'] as String?) ?? '',
+    );
   }
 
   /// Changes the signed-in user's own password (verifies the old one).
