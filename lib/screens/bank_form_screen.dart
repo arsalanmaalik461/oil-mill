@@ -73,6 +73,7 @@ class _BankFormScreenState extends State<BankFormScreen> {
         openingBalance: opening,
       ));
     }
+    p.bump(); // schedule cloud sync for this save
     if (!mounted) return;
     showSnack(context, p.t('savedSuccessfully'));
     Navigator.pop(context, true);
