@@ -105,8 +105,10 @@ class GoogleDriveService {
     try {
       final account = await _googleSignIn.signIn();
       if (account == null) {
-        lastSignInError ??=
+        lastSignInError =
             'interactive sign-in ended without an account (cancelled or refused)';
+      } else {
+        lastSignInError = null;
       }
       return account;
     } catch (e) {

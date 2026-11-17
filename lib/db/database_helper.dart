@@ -1830,7 +1830,7 @@ class DatabaseHelper {
     final brows = await d.query('production_batches',
         columns: ['wastage_qty'], where: 'id = ?', whereArgs: [batchId]);
     final wastageKg =
-        brows.isEmpty ? 0.0 : (brows.first['wastage_qty'] as num).toDouble();
+        brows.isEmpty ? 0.0 : (brows.first['wastage_qty'] as num?)?.toDouble() ?? 0.0;
     final recovery = inputKg > 0 ? outputKg / inputKg * 100 : 0.0;
     final accounted =
         inputKg > 0 ? (outputKg + wastageKg) / inputKg * 100 : 0.0;

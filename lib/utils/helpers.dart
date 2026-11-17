@@ -45,18 +45,24 @@ String intlPhone(String phone) {
 }
 
 Future<void> openWhatsApp(String phone, String message) async {
-  final uri = Uri.parse('https://wa.me/${intlPhone(phone)}?text=${Uri.encodeComponent(message)}');
-  await launchUrl(uri, mode: LaunchMode.externalApplication);
+  try {
+    final uri = Uri.parse('https://wa.me/${intlPhone(phone)}?text=${Uri.encodeComponent(message)}');
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
+  } catch (_) {}
 }
 
 Future<void> openSms(String phone, String message) async {
-  final uri = Uri.parse('sms:${intlPhone(phone)}?body=${Uri.encodeComponent(message)}');
-  await launchUrl(uri, mode: LaunchMode.externalApplication);
+  try {
+    final uri = Uri.parse('sms:${intlPhone(phone)}?body=${Uri.encodeComponent(message)}');
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
+  } catch (_) {}
 }
 
 Future<void> callPhone(String phone) async {
-  final uri = Uri.parse('tel:${phone.replaceAll(' ', '')}');
-  await launchUrl(uri, mode: LaunchMode.externalApplication);
+  try {
+    final uri = Uri.parse('tel:${phone.replaceAll(' ', '')}');
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
+  } catch (_) {}
 }
 
 Future<void> shareText(String text) async {

@@ -530,10 +530,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
         if (!mounted) return;
         showSnack(context, p.t('driveUploadFailed'));
       }
-    } catch (_) {
+    } catch (e) {
       if (!mounted) return;
       showSnack(
-          context, '${p.t('googleSignInFailed')} — ${p.t('googleSetupNote')}');
+          context, '${p.t('googleSignInFailed')} — $e');
     } finally {
       if (mounted) setState(() => _googleBusy = false);
     }
@@ -1508,7 +1508,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
                   ),
                   const SizedBox(height: 4),
-                  Text('${p.t('version')}: 1.0.5 (Build 6)'),
+                  Text('${p.t('version')}: 1.0.6 (Build 7)'),
                   const SizedBox(height: 10),
                   Text(p.t('permissionsNote'), style: const TextStyle(color: AppColors.textGrey, height: 1.4)),
                   const SizedBox(height: 8),
