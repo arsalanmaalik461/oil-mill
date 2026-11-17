@@ -967,19 +967,22 @@ extension FirebaseUsers on FirebaseService {
     var count = 0;
     for (final doc in snap.docs) {
       final rowsSnap = await doc.reference.collection('rows').get();
-      final List<Map<String, dynamic>> rows;
-      if (rowsSnap.docs.isNotEmpty) {
-        rows = rowsSnap.docs
-            .map((d) => Map<String, dynamic>.from(d.data()))
-            .toList()
-          ..sort((a, b) =>
-              ((a['id'] as num?) ?? 0).compareTo((b['id'] as num?) ?? 0));
-      } else {
-        final legacy = (doc.data()['rows'] as List?) ?? const [];
-        rows = legacy
-            .map((r) => Map<String, dynamic>.from(r as Map))
-            .toList();
-      }
+      final v2Rows = rowsSnap.docs
+          .map((d) => Map<String, dynamic>.from(d.data()))
+          .toList()
+        ..sort((a, b) =>
+            ((a['id'] as num?) ?? 0).compareTo((b['id'] as num?) ?? 0));
+      final legacyRows = ((doc.data()['rows'] as List?) ?? const [])
+          .map((r) => Map<String, dynamic>.from(r as Map))
+          .toList()
+        ..sort((a, b) =>
+            ((a['id'] as num?) ?? 0).compareTo((b['id'] as num?) ?? 0));
+      // Completeness: take the FULLER source. A first v2 sync that
+      // was interrupted mid-table can leave a partial rows
+      // subcollection next to the complete legacy rows array — the
+      // old "any v2 rows win" rule would have restored only the
+      // partial set and silently dropped the rest of the table.
+      final rows = v2Rows.length >= legacyRows.length ? v2Rows : legacyRows;
       for (final row in rows) {
         await _resolveCloudImage(row);
       }
