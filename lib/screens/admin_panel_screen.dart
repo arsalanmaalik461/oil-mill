@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../db/database_helper.dart';
+import '../models/models.dart';
 import '../providers/app_provider.dart';
 import '../services/firebase_service.dart';
 import '../theme/app_theme.dart';
@@ -191,6 +193,134 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
     try {
       await FirebaseService.instance.setUserPassword(user.username, newPass);
       if (mounted) showSnack(context, p.t('passwordChanged'));
+    } catch (e) {
+      if (mounted) showSnack(context, '$e');
+    } finally {
+      if (mounted) setState(() => _busyUser = null);
+    }
+  }
+
+  /// Full edit: username, email, phone and password in one form
+  /// (password blank = keep current). A username change MOVES the
+  /// user's cloud data to the new doc id (see
+  /// FirebaseService.updateUser); when the renamed user is the one
+  /// bound / signed in on THIS device, the local binding, session
+  /// and business owner are re-pointed at the new name so this phone
+  /// keeps working as them.
+  Future<void> _editUser(AppProvider p, AppUserRecord user) async {
+    final usernameCtrl = TextEditingController(text: user.username);
+    final emailCtrl = TextEditingController(text: user.email);
+    final phoneCtrl = TextEditingController(text: user.phone);
+    final passCtrl = TextEditingController();
+    final emailLabel = p.isUrdu ? 'ای میل (اختیاری)' : 'Email (optional)';
+    final phoneLabel = p.isUrdu ? 'فون نمبر (اختیاری)' : 'Phone (optional)';
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('${p.t('editUser')} — ${user.username}'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: usernameCtrl,
+                autocorrect: false,
+                decoration: InputDecoration(labelText: p.t('usernameLbl')),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: emailCtrl,
+                keyboardType: TextInputType.emailAddress,
+                autocorrect: false,
+                decoration: InputDecoration(labelText: emailLabel),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: phoneCtrl,
+                keyboardType: TextInputType.phone,
+                decoration: InputDecoration(labelText: phoneLabel),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: passCtrl,
+                obscureText: true,
+                decoration: InputDecoration(
+                  labelText: p.t('passwordLbl'),
+                  helperText: p.t('leaveBlankToKeep'),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(p.t('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(p.t('save')),
+          ),
+        ],
+      ),
+    );
+    final newName = usernameCtrl.text;
+    final newEmail = emailCtrl.text;
+    final newPhone = phoneCtrl.text;
+    final newPass = passCtrl.text;
+    usernameCtrl.dispose();
+    emailCtrl.dispose();
+    phoneCtrl.dispose();
+    passCtrl.dispose();
+    if (saved != true || !mounted) return;
+    if (newName.trim().isEmpty) {
+      showSnack(context, p.t('fillAllFields'));
+      return;
+    }
+    if (newPass.isNotEmpty && newPass.length < 6) {
+      showSnack(context, p.t('passwordTooShort'));
+      return;
+    }
+    setState(() => _busyUser = user.username);
+    try {
+      await FirebaseService.instance.updateUser(
+        currentUsername: user.username,
+        newUsername: newName,
+        email: newEmail,
+        phone: newPhone,
+        newPassword: newPass.isEmpty ? null : newPass,
+      );
+      if (!mounted) return;
+      if (FirebaseService.isUsernameRename(user.username, newName)) {
+        final normalized = FirebaseService.normalizeUsername(newName);
+        // Rebind this device when the renamed user lives here.
+        final bound =
+            await DatabaseHelper.instance.getBusinessByUsername(user.username);
+        if (bound != null) {
+          await DatabaseHelper.instance.updateBusiness(Business(
+            id: bound.id,
+            name: bound.name,
+            owner: bound.owner,
+            phone: bound.phone,
+            address: bound.address,
+            appUsername: normalized,
+          ));
+        }
+        if (p.sessionUsername == user.username) {
+          await p.signInSession(normalized, p.businessId);
+        }
+      }
+      await _loadUsers();
+      if (mounted) showSnack(context, p.t('savedSuccessfully'));
+    } on StateError catch (e) {
+      if (!mounted) return;
+      showSnack(
+          context,
+          e.message == 'user-exists'
+              ? p.t('userExists')
+              : e.message == 'username-empty'
+                  ? p.t('fillAllFields')
+                  : e.message);
     } catch (e) {
       if (mounted) showSnack(context, '$e');
     } finally {
@@ -399,6 +529,8 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
                           PopupMenuButton<String>(
                             onSelected: (v) {
                               switch (v) {
+                                case 'edit':
+                                  _editUser(p, user);
                                 case 'password':
                                   _changePassword(p, user);
                                 case 'toggle':
@@ -408,6 +540,10 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
                               }
                             },
                             itemBuilder: (ctx) => [
+                              PopupMenuItem(
+                                value: 'edit',
+                                child: Text(p.t('editUser')),
+                              ),
                               PopupMenuItem(
                                 value: 'password',
                                 child: Text(p.t('changePassword')),

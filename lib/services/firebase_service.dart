@@ -32,6 +32,33 @@ class FirebaseService {
     return 'none';
   }
 
+  /// The one normalization every username goes through (createUser
+  /// applies it too): trimmed + lowercased. The username becomes the
+  /// Firestore document id, so it must be produced identically
+  /// everywhere.
+  static String normalizeUsername(String raw) => raw.trim().toLowerCase();
+
+  /// Whether [newUsername] actually renames [currentUsername] after
+  /// normalization — a rename is a data MOVE (doc id + subcollection
+  /// root + sync-cache keys), not a field edit.
+  static bool isUsernameRename(String currentUsername, String newUsername) =>
+      normalizeUsername(currentUsername) != normalizeUsername(newUsername);
+
+  /// Validates a proposed username from the admin edit form against
+  /// the existing doc ids. Returns a StateError code or null:
+  /// 'username-empty' | 'user-exists'. Keeping the SAME username is
+  /// valid — that is an in-place field edit, not a rename.
+  static String? validateUsernameChange(String currentUsername,
+      String newUsername, Set<String> existingUsernames) {
+    final next = normalizeUsername(newUsername);
+    if (next.isEmpty) return 'username-empty';
+    if (next != normalizeUsername(currentUsername) &&
+        existingUsernames.contains(next)) {
+      return 'user-exists';
+    }
+    return null;
+  }
+
   /// Content fingerprint of one business's full export (the shape
   /// produced by exportBusinessData): a [tableSyncHash] over every
   /// table's combined hash. Two exports holding the same rows — in
@@ -467,7 +494,7 @@ extension FirebaseUsers on FirebaseService {
     required String password,
   }) async {
     if (!isConfigured) throw StateError('firebase-not-configured');
-    final uname = username.trim().toLowerCase();
+    final uname = FirebaseService.normalizeUsername(username);
     final existing = await _users.doc(uname).get();
     if (existing.exists) throw StateError('user-exists');
     await _users.doc(uname).set({
@@ -511,7 +538,179 @@ extension FirebaseUsers on FirebaseService {
 
   Future<void> deleteUser(String username) async {
     if (!isConfigured) throw StateError('firebase-not-configured');
-    await _users.doc(username).delete();
+    await _deleteUserTree(FirebaseService.normalizeUsername(username));
+    await _clearSyncCaches(FirebaseService.normalizeUsername(username));
+  }
+
+  /// Full user edit (admin panel): email / phone / password, and —
+  /// when [newUsername] differs after normalization — a username
+  /// MOVE. The username is the Firestore doc id, the root of the
+  /// user's tables/snapshots subcollections and of this device's
+  /// delta-sync cache keys, so a rename creates the new doc with the
+  /// edited fields, copies the whole data tree across in chunked
+  /// batches, then deletes the old tree and clears the old name's
+  /// cached sync hashes — the user's cloud data is never left behind
+  /// or duplicated under both names. [newPassword] null/empty keeps
+  /// the current password. Throws StateError('username-empty') or
+  /// StateError('user-exists') on an invalid new username.
+  Future<void> updateUser({
+    required String currentUsername,
+    required String newUsername,
+    required String email,
+    required String phone,
+    String? newPassword,
+  }) async {
+    if (!isConfigured) throw StateError('firebase-not-configured');
+    final cur = FirebaseService.normalizeUsername(currentUsername);
+    final next = FirebaseService.normalizeUsername(newUsername);
+    final snap = await _users.get();
+    final ids = snap.docs.map((d) => d.id).toSet();
+    final err = FirebaseService.validateUsernameChange(cur, next, ids);
+    if (err != null) throw StateError(err);
+    final trimmedEmail = email.trim();
+    final trimmedPhone = phone.trim();
+    final hasNewPassword = newPassword != null && newPassword.isNotEmpty;
+    if (!FirebaseService.isUsernameRename(cur, next)) {
+      final fields = <String, dynamic>{
+        'email': trimmedEmail,
+        'phone': trimmedPhone,
+      };
+      if (hasNewPassword) {
+        fields['password'] = newPassword;
+        fields['password_hash'] = FieldValue.delete();
+      }
+      await _users.doc(cur).update(fields);
+      return;
+    }
+    // MOVE — new doc first: until the copy completes the old tree is
+    // untouched, so an interruption can never lose the user (at
+    // worst both exist briefly and the admin retries).
+    final oldSnap = await _users.doc(cur).get();
+    if (!oldSnap.exists) throw StateError('wrong');
+    final data = Map<String, dynamic>.from(oldSnap.data()!);
+    data['email'] = trimmedEmail;
+    data['phone'] = trimmedPhone;
+    if (hasNewPassword) data['password'] = newPassword;
+    data.remove('password_hash');
+    await _users.doc(next).set(data);
+    await _moveUserSubcollections(cur, next);
+    await _deleteUserTree(cur);
+    await _clearSyncCaches(cur);
+    await rekeyCachedLogin(cur, next,
+        email: trimmedEmail,
+        phone: trimmedPhone,
+        password: hasNewPassword ? newPassword : null);
+  }
+
+  /// Copies every document of one collection into another, in
+  /// chunked batches (Firestore's 500-op batch limit).
+  Future<void> _copyCollection(
+      CollectionReference<Map<String, dynamic>> from,
+      CollectionReference<Map<String, dynamic>> to) async {
+    final snap = await from.get();
+    var batch = _firestore!.batch();
+    var ops = 0;
+    for (final d in snap.docs) {
+      batch.set(to.doc(d.id), d.data());
+      if (++ops >= 400) {
+        await batch.commit();
+        batch = _firestore!.batch();
+        ops = 0;
+      }
+    }
+    if (ops > 0) await batch.commit();
+  }
+
+  /// Deletes every document of one collection, in chunked batches.
+  Future<void> _deleteCollection(
+      CollectionReference<Map<String, dynamic>> c) async {
+    final snap = await c.get();
+    var batch = _firestore!.batch();
+    var ops = 0;
+    for (final d in snap.docs) {
+      batch.delete(d.reference);
+      if (++ops >= 400) {
+        await batch.commit();
+        batch = _firestore!.batch();
+        ops = 0;
+      }
+    }
+    if (ops > 0) await batch.commit();
+  }
+
+  /// Copies a user's whole data tree — tables with their rows, and
+  /// the conflict snapshots with their table docs — from [from] to
+  /// [to] (both already-normalized usernames).
+  Future<void> _moveUserSubcollections(String from, String to) async {
+    final oldRoot = _users.doc(from);
+    final newRoot = _users.doc(to);
+    final tables = await oldRoot.collection('tables').get();
+    for (final t in tables.docs) {
+      final target = newRoot.collection('tables').doc(t.id);
+      await target.set(t.data());
+      await _copyCollection(
+          t.reference.collection('rows'), target.collection('rows'));
+    }
+    final snaps = await oldRoot.collection('snapshots').get();
+    for (final s in snaps.docs) {
+      final target = newRoot.collection('snapshots').doc(s.id);
+      await target.set(s.data());
+      await _copyCollection(
+          s.reference.collection('tables'), target.collection('tables'));
+    }
+  }
+
+  /// Deletes a user doc AND its whole data tree — a bare doc delete
+  /// does not cascade into subcollections and would orphan the data.
+  Future<void> _deleteUserTree(String username) async {
+    final root = _users.doc(username);
+    final tables = await root.collection('tables').get();
+    for (final t in tables.docs) {
+      await _deleteCollection(t.reference.collection('rows'));
+      await t.reference.delete();
+    }
+    final snaps = await root.collection('snapshots').get();
+    for (final s in snaps.docs) {
+      await _deleteCollection(s.reference.collection('tables'));
+      await s.reference.delete();
+    }
+    await root.delete();
+  }
+
+  /// Drops this device's delta-sync bookkeeping for [username]: the
+  /// cached per-table hashes and last-sync markers are keyed by
+  /// username, so after a rename or delete they describe an identity
+  /// that no longer exists.
+  Future<void> _clearSyncCaches(String username) async {
+    final prefs = await SharedPreferences.getInstance();
+    final prefix = 'sync_tbl_hash_${username}_';
+    for (final key
+        in prefs.getKeys().where((k) => k.startsWith(prefix)).toList()) {
+      await prefs.remove(key);
+    }
+    await prefs.remove('last_sync_fp_$username');
+    await prefs.remove('last_sync_at_$username');
+  }
+
+  /// Moves this device's offline login cache entry from [oldName] to
+  /// [newName] after an admin rename, so the renamed user can still
+  /// sign in offline (and via fingerprint) on this device. No-op when
+  /// they were never cached here.
+  Future<void> rekeyCachedLogin(String oldName, String newName,
+      {String? email, String? phone, String? password}) async {
+    final cached = await _cachedUsers();
+    final entry = cached.remove(oldName);
+    if (entry == null) return;
+    final m = Map<String, dynamic>.from(entry as Map);
+    if (email != null) m['email'] = email;
+    if (phone != null) m['phone'] = phone;
+    if (password != null) m['password'] = password;
+    cached[newName] = m;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('cached_users', jsonEncode(cached));
+    if (prefs.getString('last_login_username') == oldName) {
+      await prefs.setString('last_login_username', newName);
+    }
   }
 
   /// Changes the signed-in user's own password (verifies the old one).
