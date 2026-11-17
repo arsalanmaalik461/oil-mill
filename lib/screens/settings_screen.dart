@@ -517,8 +517,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final account = await _drive.signIn();
       if (!mounted) return;
       if (account == null) {
-        showSnack(
-            context, '${p.t('googleSignInFailed')} — ${p.t('googleSetupNote')}');
+        showSnack(context,
+            '${p.t('googleSignInFailed')} — ${_drive.lastSignInError ?? p.t('googleSetupNote')}');
         return;
       }
       setState(() => _googleAccount = account);

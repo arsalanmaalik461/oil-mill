@@ -84,12 +84,35 @@ class GoogleDriveService {
     }
   }
 
+  /// Why the most recent [signIn] attempt failed, in plain text
+  /// (the platform exception's own words), or null when it succeeded
+  /// or has not run yet. Settings shows this next to the generic
+  /// "sign-in failed" message so a setup problem can be diagnosed
+  /// from a screenshot instead of guessed at.
+  String? lastSignInError;
+
   /// Signs in: tries a silent sign-in first (restores an existing
-  /// session), then falls back to the interactive flow.
+  /// session), then falls back to the interactive flow. Never throws:
+  /// a failure is recorded in [lastSignInError] and null is returned.
   Future<GoogleSignInAccount?> signIn() async {
-    final silent = await _googleSignIn.signInSilently();
-    if (silent != null) return silent;
-    return _googleSignIn.signIn();
+    lastSignInError = null;
+    try {
+      final silent = await _googleSignIn.signInSilently();
+      if (silent != null) return silent;
+    } catch (e) {
+      lastSignInError = 'silent sign-in: $e';
+    }
+    try {
+      final account = await _googleSignIn.signIn();
+      if (account == null) {
+        lastSignInError ??=
+            'interactive sign-in ended without an account (cancelled or refused)';
+      }
+      return account;
+    } catch (e) {
+      lastSignInError = 'interactive sign-in: $e';
+      return null;
+    }
   }
 
   /// Signs the current user out.
