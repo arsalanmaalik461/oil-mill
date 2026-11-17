@@ -128,15 +128,45 @@ class GoogleDriveService {
     }
   }
 
-  /// Uploads raw JSON string [jsonString] as [fileName] into the Drive folder.
-  Future<String> uploadJson(String jsonString, String fileName) async {
-    final bytes = Uint8List.fromList(utf8.encode(jsonString));
-    if (currentAccount == null) {
-      await signIn();
+  /// The ONE Drive backup file name — fixed, no date in it. The
+  /// Drive folder holds exactly one current backup: every sync
+  /// replaces its content (see [_uploadSingleBackup]).
+  static const String backupFileName = 'namat_backup.json';
+
+  /// Whether a Drive file name is one of this app's backup files:
+  /// the current fixed name, or a legacy dated name from the era
+  /// when every upload created a new `namat_backup_<date>.json`.
+  static bool isBackupFileName(String name) =>
+      name.startsWith('namat_backup') && name.endsWith('.json');
+
+  /// Rotation plan for the backup files in the Drive folder ([files]
+  /// newest first): keep the newest file that already carries the
+  /// fixed [backupFileName] and update it in place; delete every
+  /// other backup file (legacy dated ones and duplicates), so
+  /// exactly one current backup remains. Non-backup files are never
+  /// in the plan. keepId is null when no fixed-name file exists yet
+  /// (the caller creates it, and all dated files are deleted).
+  static ({String? keepId, List<String> deleteIds}) planBackupRotation(
+      List<({String id, String name})> files) {
+    final backups = files.where((f) => isBackupFileName(f.name)).toList();
+    String? keepId;
+    for (final f in backups) {
+      if (f.name == backupFileName) {
+        keepId = f.id;
+        break;
+      }
     }
-    if (currentAccount == null) {
-      throw StateError('Google sign-in required before uploading.');
-    }
+    return (
+      keepId: keepId,
+      deleteIds: [for (final f in backups) if (f.id != keepId) f.id],
+    );
+  }
+
+  /// Uploads [json] as THE Drive backup: updates the fixed-name file
+  /// in place when it exists, creates it otherwise, then deletes
+  /// every other backup-pattern file so the folder always holds
+  /// exactly one current backup.
+  Future<void> _uploadSingleBackup(String json) async {
     final client = await _googleSignIn.authenticatedClient();
     if (client == null) {
       throw StateError('Could not create an authenticated Google client.');
@@ -144,18 +174,36 @@ class GoogleDriveService {
     try {
       final api = drive.DriveApi(client);
       final folderId = await _findOrCreateFolder(api);
+      final list = await api.files.list(
+        q: "'$folderId' in parents and trashed = false and name contains '.json'",
+        spaces: 'drive',
+        orderBy: 'createdTime desc',
+        $fields: 'files(id, name)',
+      );
+      final files = (list.files ?? const <drive.File>[])
+          .where((f) => f.id != null)
+          .map((f) => (id: f.id!, name: f.name ?? ''))
+          .toList();
+      final plan = planBackupRotation(files);
+      final bytes = Uint8List.fromList(utf8.encode(json));
       final media = drive.Media(Stream.value(bytes), bytes.length,
           contentType: 'application/json');
-      final file = drive.File()
-        ..name = fileName
-        ..parents = [folderId]
-        ..mimeType = 'application/json';
-      final created = await api.files.create(file, uploadMedia: media);
-      final id = created.id;
-      if (id == null) {
-        throw StateError('Drive upload finished without a file id.');
+      if (plan.keepId != null) {
+        await api.files.update(drive.File(), plan.keepId!, uploadMedia: media);
+      } else {
+        final file = drive.File()
+          ..name = backupFileName
+          ..parents = [folderId]
+          ..mimeType = 'application/json';
+        await api.files.create(file, uploadMedia: media);
       }
-      return id;
+      for (final id in plan.deleteIds) {
+        try {
+          await api.files.delete(id);
+        } catch (_) {
+          // Cleanup is best-effort: the next sync retries the plan.
+        }
+      }
     } finally {
       client.close();
     }
@@ -223,7 +271,7 @@ class GoogleDriveService {
       final prefs = await SharedPreferences.getInstance();
       final todayStr = DateFormat('yyyy-MM-dd').format(DateTime.now());
       final json = await DatabaseHelper.instance.exportJson();
-      await uploadJson(json, 'namat_backup_$todayStr.json');
+      await _uploadSingleBackup(json);
       await prefs.setString('last_auto_drive_backup_date', todayStr);
       await prefs.setString(
           'last_auto_drive_backup_time', DateTime.now().toIso8601String());

@@ -805,15 +805,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (_googleBusy) return;
     setState(() => _googleBusy = true);
     try {
-      final json = await _db.exportJson();
-      final todayStr = DateFormat('yyyy-MM-dd').format(DateTime.now());
-      final fileName = 'namat_backup_$todayStr.json';
-      await _drive.uploadJson(json, fileName);
+      // The single always-current Drive backup (fixed name, updated
+      // in place) — the same upload the per-entry sync runs.
+      final ok = await _drive.uploadCurrentBackupNow();
       if (!mounted) return;
-      showSnack(context, p.t('driveBackupDone'));
-    } catch (e) {
-      if (!mounted) return;
-      showSnack(context, '${p.t('driveUploadFailed')}: $e');
+      showSnack(
+          context, ok ? p.t('driveBackupDone') : p.t('driveUploadFailed'));
     } finally {
       if (mounted) setState(() => _googleBusy = false);
     }

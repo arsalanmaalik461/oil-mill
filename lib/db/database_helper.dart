@@ -1,5 +1,7 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 import '../models/models.dart';
 
@@ -2405,6 +2407,23 @@ class DatabaseHelper {
     }
     return jsonEncode(out);
   }
+
+  /// The single on-device backup file name — fixed, no date in it.
+  /// This is the same file Settings' Export Backup writes + shares.
+  static const String localBackupFileName = 'namat_backup.json';
+
+  /// Rewrites the on-device backup file inside [dir] with the FULL
+  /// current backup: one file, always current — every write replaces
+  /// the previous content wholesale (no dated files, no pile-up).
+  Future<File> writeLocalBackupTo(Directory dir) async {
+    final file = File('${dir.path}/$localBackupFileName');
+    await file.writeAsString(await exportJson());
+    return file;
+  }
+
+  /// [writeLocalBackupTo] into the app's documents directory.
+  Future<File> writeLocalBackupFile() async =>
+      writeLocalBackupTo(await getApplicationDocumentsDirectory());
 
   Future<void> importJson(String source) async {
     final data = jsonDecode(source) as Map<String, dynamic>;

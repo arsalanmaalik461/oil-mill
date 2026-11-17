@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../db/database_helper.dart';
 import '../l10n/app_strings.dart';
 import '../services/firebase_service.dart';
 import '../utils/google_drive_service.dart';
@@ -136,6 +137,15 @@ class AppProvider extends ChangeNotifier {
     if (_driveSyncRunning || _sessionUsername.isEmpty) return;
     _driveSyncRunning = true;
     try {
+      // The single on-device backup file rides the SAME debounced
+      // schedule as the Drive upload: one fixed-name file in the
+      // app's documents area, rewritten with the full current data
+      // after every change — automatic, no Settings toggle.
+      try {
+        await DatabaseHelper.instance.writeLocalBackupFile();
+      } catch (_) {
+        // A failed local write must not block the Drive upload.
+      }
       await GoogleDriveService.instance.uploadCurrentBackupNow();
     } catch (_) {
       // Not connected to Drive yet: the daily backup remains the net.
