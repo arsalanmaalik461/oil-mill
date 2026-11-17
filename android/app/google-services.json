@@ -1,41 +1,41 @@
 {
   "project_info": {
-    "project_number": "797982120974",
-    "project_id": "namat-oil-mill",
-    "storage_bucket": "namat-oil-mill.firebasestorage.app"
+    "project_number": "738294359330",
+    "project_id": "ghardhondo-a930e",
+    "storage_bucket": "ghardhondo-a930e.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:797982120974:android:517af8c16114d3651fb05f",
+        "mobilesdk_app_id": "1:738294359330:android:6a043935661e715db3b17b",
         "android_client_info": {
           "package_name": "com.arsu.oilmill"
         }
       },
       "oauth_client": [
         {
-          "client_id": "797982120974-cn98iqhftunp35votfvhbutjhj79uli8.apps.googleusercontent.com",
+          "client_id": "738294359330-kh7kafupaqpejvdtuqit95r0m945q1ht.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
             "package_name": "com.arsu.oilmill",
-            "certificate_hash": "5e838f745d4ca2355c5ae60ce618d4633e8f4355"
+            "certificate_hash": "71b34b82a9424f19270d45e0a21e6cd4452428dd"
           }
         },
         {
-          "client_id": "797982120974-lclr914sdp4j19qemnh62q0gmpbt9ade.apps.googleusercontent.com",
+          "client_id": "738294359330-8j6da3fdfacsf4ernpn2j2jmnvecp3rg.apps.googleusercontent.com",
           "client_type": 3
         }
       ],
       "api_key": [
         {
-          "current_key": "AIzaSyC1d-QuP0LgzZSUjDxH-Fumq3CLOVmPLaY"
+          "current_key": "AIzaSyDH57xSTQL0MoayZItGM5-1P2MIFN3as1s"
         }
       ],
       "services": {
         "appinvite_service": {
           "other_platform_oauth_client": [
             {
-              "client_id": "797982120974-ddf5po8b46ea6u5g9gi8j51onkd7e001.apps.googleusercontent.com",
+              "client_id": "738294359330-8j6da3fdfacsf4ernpn2j2jmnvecp3rg.apps.googleusercontent.com",
               "client_type": 3
             }
           ]
