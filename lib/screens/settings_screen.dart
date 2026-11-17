@@ -50,7 +50,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _drive = GoogleDriveService.instance;
   GoogleSignInAccount? _googleAccount;
   bool _googleBusy = false;
-  bool _autoDriveBackup = true;
   String? _backupStatus;
   String? _backupWhen;
   bool _accountBusy = false;
@@ -88,7 +87,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() {
       _businesses = list;
       _pinSet = prefs.getString('pin_hash') != null;
-      _autoDriveBackup = prefs.getBool('auto_drive_backup_enabled') ?? true;
       _backupStatus = prefs.getString('drive_backup_status');
       _backupWhen = prefs.getString('last_auto_drive_backup_time') ??
           prefs.getString('drive_backup_last_attempt');
@@ -1244,17 +1242,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     title: Text(p.t('fillPhonesFromContacts')),
                     subtitle: Text(p.t('fillPhonesFromContactsSub')),
                     onTap: () => _fillPhonesFromContacts(p),
-                  ),
-                  SwitchListTile(
-                    secondary: const Icon(Icons.alarm, color: AppColors.primary),
-                    title: Text(p.t('autoDriveBackup')),
-                    subtitle: Text(p.t('autoDriveBackupSub')),
-                    value: _autoDriveBackup,
-                    onChanged: (v) async {
-                      setState(() => _autoDriveBackup = v);
-                      final prefs = await SharedPreferences.getInstance();
-                      await prefs.setBool('auto_drive_backup_enabled', v);
-                    },
                   ),
                   ListTile(
                     leading: Icon(

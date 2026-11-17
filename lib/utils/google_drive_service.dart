@@ -1,4 +1,3 @@
-import 'backup_notifier.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
@@ -10,11 +9,10 @@ import 'package:google_sign_in/google_sign_in.dart';
 import 'package:googleapis/drive/v3.dart' as drive;
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:path_provider/path_provider.dart';
 
 import '../db/database_helper.dart';
 
-/// Google Drive backup for ledger PDFs & automated daily database JSON backups.
+/// Google Drive backup for ledger PDFs & per-entry database JSON backups.
 ///
 /// Uses the signed-in user's own Drive (scope: drive.file — the app can
 /// only see files/folders it creates itself). All PDFs & backups go into a
@@ -30,8 +28,6 @@ class GoogleDriveService {
   final GoogleSignIn _googleSignIn = GoogleSignIn(
     scopes: [drive.DriveApi.driveFileScope],
   );
-
-  Timer? _periodicBackupTimer;
 
   /// The underlying [GoogleSignIn] instance (for silent session restore).
   GoogleSignIn get googleSignIn => _googleSignIn;
@@ -212,69 +208,9 @@ class GoogleDriveService {
     }
   }
 
-  /// Automatically executes daily midnight backup to Google Drive if due.
-  /// Runs silently in the background without disturbing the user.
-  Future<bool> runAutoBackupIfDue() async {
-    final prefs = await SharedPreferences.getInstance();
-    // On-device daily record file (owner's request): one full-data
-    // JSON per day written onto the phone itself, independent of the
-    // Drive sign-in, so the record exists even fully offline. Runs
-    // with the daily check — the first app open of a new day writes
-    // that day's file.
-    try {
-      final today = DateFormat('yyyy-MM-dd').format(DateTime.now());
-      if (prefs.getString('last_local_backup_file_date') != today) {
-        final dir = await getExternalStorageDirectory() ??
-            await getApplicationDocumentsDirectory();
-        final json = await DatabaseHelper.instance.exportJson();
-        await File('${dir.path}/namat_backup_$today.json')
-            .writeAsString(json);
-        await prefs.setString('last_local_backup_file_date', today);
-      }
-    } catch (_) {}
-    try {
-      final enabled = prefs.getBool('auto_drive_backup_enabled') ?? true;
-      if (!enabled) return false;
-
-      // Ensure signed in silently. Not being signed in is NOT a failure —
-      // the backup simply is not connected yet.
-      if (currentAccount == null) {
-        final silent = await _googleSignIn.signInSilently();
-        if (silent == null) return false;
-      }
-
-      final todayStr = DateFormat('yyyy-MM-dd').format(DateTime.now());
-      final lastDate = prefs.getString('last_auto_drive_backup_date');
-      if (lastDate == todayStr) {
-        return false; // Already successfully backed up today
-      }
-
-      final json = await DatabaseHelper.instance.exportJson();
-      final fileName = 'namat_backup_$todayStr.json';
-      await uploadJson(json, fileName);
-
-      await prefs.setString('last_auto_drive_backup_date', todayStr);
-      await prefs.setString(
-          'last_auto_drive_backup_time', DateTime.now().toIso8601String());
-      await prefs.setString('drive_backup_status', 'ok');
-      await prefs.remove('drive_backup_error');
-      debugPrint('Automated Google Drive daily backup completed: $fileName');
-      return true;
-    } catch (e) {
-      // A real failure (network, quota, export error): record it where
-      // Settings can show it, and notify the owner.
-      await prefs.setString('drive_backup_status', 'failed');
-      await prefs.setString('drive_backup_error', '$e');
-      await prefs.setString('drive_backup_last_attempt',
-          DateTime.now().toIso8601String());
-      debugPrint('Automated Drive backup FAILED: $e');
-      await BackupNotifier.instance.showBackupFailed();
-      return false;
-    }
-  }
-
   /// Immediate backup (owner's rule: an entry must reach Drive at
-  /// once, not at the next daily run). Uploads the CURRENT full
+  /// once, on its own — the per-entry sync in AppProvider calls this
+  /// after every change). Uploads the CURRENT full
   /// database JSON under today's backup file name — the file is
   /// overwritten through the day, so Drive always holds the newest
   /// state. Returns false when Drive is not connected.
@@ -388,16 +324,6 @@ class GoogleDriveService {
       'tables': tables,
       'sizeKb': ((int.tryParse(latest.size ?? '') ?? 0) / 1024).round(),
     };
-  }
-
-  /// Starts a periodic background timer (every 30 mins) to check if midnight /
-  /// next day has arrived to trigger automated Google Drive backup.
-  void startAutoBackupScheduler() {
-    _periodicBackupTimer?.cancel();
-    runAutoBackupIfDue();
-    _periodicBackupTimer = Timer.periodic(const Duration(minutes: 30), (_) {
-      runAutoBackupIfDue();
-    });
   }
 
   /// Finds the app folder by name, creating it when absent.

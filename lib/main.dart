@@ -3,8 +3,6 @@ import 'package:provider/provider.dart';
 import 'providers/app_provider.dart';
 import 'services/firebase_service.dart';
 import 'theme/app_theme.dart';
-import 'utils/google_drive_service.dart';
-import 'utils/backup_notifier.dart';
 import 'screens/lock_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/home_screen.dart';
@@ -14,8 +12,6 @@ import 'screens/more_screen.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await FirebaseService.instance.initialize();
-  await BackupNotifier.instance.init();
-  GoogleDriveService.instance.startAutoBackupScheduler();
   runApp(
     ChangeNotifierProvider(
       create: (_) => AppProvider()..load(),
