@@ -219,6 +219,7 @@ class _ExpenseBookScreenState extends State<ExpenseBookScreen> {
       // The linked cash entry follows the edit automatically.
       await _db.updateExpense(entry);
     }
+    p.bump(); // schedule cloud sync for this save
     if (!mounted) return;
     showSnack(context, p.t('savedSuccessfully'));
     _load();
@@ -229,6 +230,7 @@ class _ExpenseBookScreenState extends State<ExpenseBookScreen> {
     final ok = await confirmDelete(context, p.t('confirmDelete'));
     if (!ok || !mounted) return;
     await _db.deleteExpense(e.id!);
+    p.bump(); // schedule cloud sync for this delete
     _load();
   }
 
