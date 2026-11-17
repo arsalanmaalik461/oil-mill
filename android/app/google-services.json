@@ -14,6 +14,14 @@
       },
       "oauth_client": [
         {
+          "client_id": "738294359330-btritdpcacnafj5qleg4uued1qedvpks.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.arsu.oilmill",
+            "certificate_hash": "5e838f745d4ca2355c5ae60ce618d4633e8f4355"
+          }
+        },
+        {
           "client_id": "738294359330-kh7kafupaqpejvdtuqit95r0m945q1ht.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
