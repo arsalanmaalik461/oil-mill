@@ -121,6 +121,19 @@ class FirebaseService {
     return loginSyncDecision(localRows, cloudRows);
   }
 
+  /// Whether the login path must pay for a local content fingerprint
+  /// at all: only when the cloud fingerprint EXISTS and has MOVED
+  /// since this device's last sync. When it has not moved (the
+  /// everyday case — same phone, nothing synced from elsewhere), the
+  /// count rule alone decides and login never scans the ledger.
+  static bool fingerprintCheckNeeded({
+    required String? cloudFingerprint,
+    required String? lastSyncedFingerprint,
+  }) =>
+      cloudFingerprint != null &&
+      lastSyncedFingerprint != null &&
+      cloudFingerprint != lastSyncedFingerprint;
+
   FirebaseService._();
   static final FirebaseService instance = FirebaseService._();
 
@@ -1162,12 +1175,27 @@ extension FirebaseUsers on FirebaseService {
   /// value-only changes another device synced — e.g. party phone
   /// numbers filled in there — which row counts cannot see. Returns
   /// what happened: 'restored' | 'uploading' | 'none'.
-  Future<String> syncOnLogin(String username, int businessId) async {
+  ///
+  /// STAGED for login speed (the decision logic is exactly
+  /// [loginSyncDecisionV2]'s): stage 1 compares COUNT(*) locally
+  /// against the cloud's summary docs — no row is materialized, so
+  /// the everyday login (this phone, already in sync) decides in
+  /// milliseconds. Only when the cloud fingerprint has actually
+  /// MOVED since this device's last sync does stage 2 pay for one
+  /// local export + fingerprint. [onRestoring] fires right before a
+  /// restore begins, so the login screen can show progress instead
+  /// of a frozen spinner.
+  Future<String> syncOnLogin(String username, int businessId,
+      {void Function()? onRestoring}) async {
     if (!isConfigured) return 'none';
-    final local = await DatabaseHelper.instance.totalBusinessRows(businessId);
+    final local = await DatabaseHelper.instance.countBusinessRows(businessId);
     final cloud = await cloudRowCount(username);
+    if (cloud > local) {
+      onRestoring?.call();
+      await restoreUserData(username, businessId);
+      return 'restored';
+    }
     String? cloudFp;
-    String? localFp;
     String? lastFp;
     try {
       final doc = await _users.doc(username).get();
@@ -1177,24 +1205,24 @@ extension FirebaseUsers on FirebaseService {
       // count rule below still applies.
     }
     try {
-      final data =
-          await DatabaseHelper.instance.exportBusinessData(businessId);
-      localFp = FirebaseService.businessFingerprint(data);
-    } catch (_) {}
-    try {
       final prefs = await SharedPreferences.getInstance();
       lastFp = prefs.getString('last_sync_fp_$username');
     } catch (_) {}
-    switch (FirebaseService.loginSyncDecisionV2(
-      localRows: local,
-      cloudRows: cloud,
-      localFingerprint: localFp,
-      cloudFingerprint: cloudFp,
-      lastSyncedFingerprint: lastFp,
-    )) {
-      case 'restore':
+    if (FirebaseService.fingerprintCheckNeeded(
+        cloudFingerprint: cloudFp, lastSyncedFingerprint: lastFp)) {
+      String? localFp;
+      try {
+        final data =
+            await DatabaseHelper.instance.exportBusinessData(businessId);
+        localFp = FirebaseService.businessFingerprint(data);
+      } catch (_) {}
+      if (localFp != null && localFp == lastFp) {
+        onRestoring?.call();
         await restoreUserData(username, businessId);
         return 'restored';
+      }
+    }
+    switch (FirebaseService.loginSyncDecision(local, cloud)) {
       case 'upload':
         unawaited(() async {
           try {
@@ -1218,7 +1246,12 @@ extension FirebaseUsers on FirebaseService {
     if (snap.docs.isEmpty) return 0;
     final data = <String, dynamic>{'app': 'namat_oil_mill', 'version': 1};
     var count = 0;
-    for (final doc in snap.docs) {
+    // Fetch every table's rows CONCURRENTLY (one wave instead of 21
+    // sequential round-trips) and resolve attachment photos
+    // concurrently within each table: a full-ledger restore is
+    // network-bound, and doing it table-by-table, row-by-row made
+    // login crawl.
+    final perTable = await Future.wait(snap.docs.map((doc) async {
       final rowsSnap = await doc.reference.collection('rows').get();
       final v2Rows = rowsSnap.docs
           .map((d) => Map<String, dynamic>.from(d.data()))
@@ -1236,11 +1269,12 @@ extension FirebaseUsers on FirebaseService {
       // old "any v2 rows win" rule would have restored only the
       // partial set and silently dropped the rest of the table.
       final rows = v2Rows.length >= legacyRows.length ? v2Rows : legacyRows;
-      for (final row in rows) {
-        await _resolveCloudImage(row);
-      }
-      data[doc.id] = rows;
-      count += rows.length;
+      await Future.wait(rows.map(_resolveCloudImage));
+      return MapEntry(doc.id, rows);
+    }));
+    for (final e in perTable) {
+      data[e.key] = e.value;
+      count += e.value.length;
     }
     if (count == 0) return 0;
     await DatabaseHelper.instance.importBusinessData(businessId, data);

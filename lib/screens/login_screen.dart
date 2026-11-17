@@ -34,6 +34,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _idCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
   bool _busy = false;
+  String? _status;
   bool _fpReady = false;
 
   // --- 8-second hold on "Welcome" (hidden admin access) ---
@@ -79,7 +80,12 @@ class _LoginScreenState extends State<LoginScreen> {
     } catch (_) {
       // Fingerprint unavailable/failed — password sign-in stays available.
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _status = null;
+        });
+      }
     }
   }
 
@@ -239,7 +245,12 @@ class _LoginScreenState extends State<LoginScreen> {
 
       await _finishLogin(rec, p);
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _status = null;
+        });
+      }
     }
   }
 
@@ -265,7 +276,7 @@ class _LoginScreenState extends State<LoginScreen> {
               .toList();
           if (unbound.length == 1) {
             final candidate = unbound.first;
-            final rows = await db.totalBusinessRows(candidate.id!);
+            final rows = await db.countBusinessRows(candidate.id!);
             if (rows == 0) {
               await db.updateBusiness(Business(
                 id: candidate.id,
@@ -311,7 +322,15 @@ class _LoginScreenState extends State<LoginScreen> {
         if (_firebase.isConfigured) {
           try {
             await _firebase
-                .syncOnLogin(rec.username, bizId)
+                .syncOnLogin(rec.username, bizId, onRestoring: () {
+                  // A restore genuinely has to finish before entry
+                  // (the data must BE there) — but it shows progress
+                  // instead of a frozen spinner. When no restore is
+                  // needed this never fires and login is immediate.
+                  if (mounted) {
+                    setState(() => _status = p.t('restoringData'));
+                  }
+                })
                 .timeout(const Duration(seconds: 60));
           } catch (_) {
             // Sync problems must never block sign-in.
@@ -438,6 +457,14 @@ class _LoginScreenState extends State<LoginScreen> {
                                         fontWeight: FontWeight.bold),
                                   ),
                           ),
+                          if (_busy && _status != null) ...[
+                            const SizedBox(height: 10),
+                            Text(
+                              _status!,
+                              style: TextStyle(
+                                  fontSize: 13, color: Colors.grey.shade600),
+                            ),
+                          ],
                           if (_fpReady) ...[
                             const SizedBox(height: 12),
                             OutlinedButton.icon(

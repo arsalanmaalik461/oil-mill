@@ -58,4 +58,59 @@ void main() {
     // Another business stays untouched.
     expect(await db.totalBusinessRows(2), 0);
   });
+
+  test('countBusinessRows (COUNT(*) only) equals totalBusinessRows',
+      () async {
+    final day = DateTime(2026, 11, 6, 12);
+    final biz = await db
+        .insertBusiness(Business(name: 'Count Equivalence Mill'));
+    // An untouched business counts just its own profile row, both ways.
+    expect(await db.countBusinessRows(biz), 1);
+    expect(await db.countBusinessRows(biz),
+        await db.totalBusinessRows(biz));
+    final partyId = await db.insertParty(
+        Party(businessId: biz, type: 'customer', name: 'Eq Customer'));
+    await db.insertLedgerEntry(PartyTransaction(
+        partyId: partyId,
+        type: 'udhaar',
+        amount: 250,
+        note: 'equivalence probe',
+        dateTime: day));
+    // profile + party + transaction + linked cash entry = 4.
+    expect(await db.totalBusinessRows(biz), 4);
+    expect(await db.countBusinessRows(biz), 4,
+        reason: 'the fast login count must never disagree with the '
+            'export-based count it replaces');
+    expect(await db.countBusinessRows(99999), 0);
+  });
+
+  group('fingerprintCheckNeeded — when login pays for a fingerprint',
+      () {
+    test('cloud fingerprint moved since last sync -> check', () {
+      expect(
+          FirebaseService.fingerprintCheckNeeded(
+              cloudFingerprint: 'fp-new', lastSyncedFingerprint: 'fp-old'),
+          isTrue);
+    });
+    test('cloud fingerprint unchanged -> no check (the fast path)', () {
+      expect(
+          FirebaseService.fingerprintCheckNeeded(
+              cloudFingerprint: 'fp-same', lastSyncedFingerprint: 'fp-same'),
+          isFalse);
+    });
+    test('missing fingerprints -> no check (count rule decides)', () {
+      expect(
+          FirebaseService.fingerprintCheckNeeded(
+              cloudFingerprint: null, lastSyncedFingerprint: 'fp-old'),
+          isFalse);
+      expect(
+          FirebaseService.fingerprintCheckNeeded(
+              cloudFingerprint: 'fp-new', lastSyncedFingerprint: null),
+          isFalse);
+      expect(
+          FirebaseService.fingerprintCheckNeeded(
+              cloudFingerprint: null, lastSyncedFingerprint: null),
+          isFalse);
+    });
+  });
 }

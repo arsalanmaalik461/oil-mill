@@ -2502,6 +2502,34 @@ class DatabaseHelper {
     return total;
   }
 
+  /// COUNT(*)-only twin of [totalBusinessRows]: the SAME total
+  /// (the business profile row + parent tables scoped by business +
+  /// child tables scoped through their parents), computed without
+  /// materializing a single row. The login path counts with this —
+  /// a ledger with thousands of entries must not pay a full export
+  /// just to be counted.
+  Future<int> countBusinessRows(int bizId) async {
+    final d = await db;
+    Future<int> count(String sql, List<Object?> args) async {
+      final r = await d.rawQuery(sql, args);
+      return (r.first['c'] as num?)?.toInt() ?? 0;
+    }
+
+    var total = await count(
+        'SELECT COUNT(*) AS c FROM businesses WHERE id = ?', [bizId]);
+    for (final t in _bizTables) {
+      total += await count(
+          'SELECT COUNT(*) AS c FROM $t WHERE business_id = ?', [bizId]);
+    }
+    for (final e in _childTables.entries) {
+      total += await count(
+          'SELECT COUNT(*) AS c FROM ${e.key} WHERE ${_fkOf(e.key)} '
+          'IN (SELECT id FROM ${e.value} WHERE business_id = ?)',
+          [bizId]);
+    }
+    return total;
+  }
+
   /// Total rows across ALL of a business's tables (parents and
   /// children) — the same counting [FirebaseService.cloudRowCount]
   /// does on the cloud side, so the two can be compared directly.
