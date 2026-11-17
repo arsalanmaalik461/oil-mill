@@ -101,6 +101,43 @@ class _RemindersScreenState extends State<RemindersScreen> {
     return _ReminderData(bizName, business, rows, dueRows);
   }
 
+  /// A party with no number used to be a dead end here (a "no number"
+  /// snack and nothing else). Now tapping any of its reminder actions
+  /// offers to add the number right here: it is saved to the party
+  /// and the list reloads, so the reminder can be sent immediately.
+  Future<void> _addPhone(_ReminderRow row) async {
+    final id = row.party.id;
+    if (id == null) return;
+    final p = context.read<AppProvider>();
+    final controller = TextEditingController();
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: Text(row.party.name),
+        content: TextField(
+          controller: controller,
+          keyboardType: TextInputType.phone,
+          autofocus: true,
+          decoration: InputDecoration(labelText: p.t('phone')),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(c, false),
+              child: Text(p.t('cancel'))),
+          TextButton(
+              onPressed: () => Navigator.pop(c, true),
+              child: Text(p.t('save'))),
+        ],
+      ),
+    );
+    final number = controller.text.trim();
+    if (saved != true || number.isEmpty || !mounted) return;
+    await DatabaseHelper.instance.setPartyPhone(id, number);
+    if (!mounted) return;
+    context.read<AppProvider>().bump();
+    _reload();
+  }
+
   /// Opens WhatsApp for this party, then stamps the reminder as sent so
   /// the party drops out of the auto-reminder due section for 5 days.
   Future<void> _sendWhatsAppReminder(_ReminderData d, _ReminderRow row) async {
@@ -225,7 +262,7 @@ class _RemindersScreenState extends State<RemindersScreen> {
           final row = d.dueRows[i];
           final party = row.party;
           final hasPhone = party.phone.trim().isNotEmpty;
-          void needPhone() => showSnack(context, p.t('noPhone'));
+          void needPhone() => _addPhone(row);
           final lastText = party.lastReminderAt == null
               ? p.t('never')
               : dateFmt.format(party.lastReminderAt!);
@@ -345,7 +382,7 @@ class _RemindersScreenState extends State<RemindersScreen> {
                     final row = d.rows[i];
                     final party = row.party;
                     final hasPhone = party.phone.trim().isNotEmpty;
-                    void needPhone() => showSnack(context, p.t('noPhone'));
+                    void needPhone() => _addPhone(row);
                     return Card(
                       margin: const EdgeInsets.symmetric(vertical: 5),
                       child: Padding(

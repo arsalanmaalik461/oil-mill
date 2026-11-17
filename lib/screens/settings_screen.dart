@@ -630,8 +630,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   /// One-tap fix for imported parties whose numbers never came with
   /// the statements: match parties with an empty phone against the
   /// phone's contacts BY NAME and fill the numbers in (with a
-  /// confirmation first). Existing numbers are never overwritten,
-  /// and a name with two different numbers in contacts is skipped.
+  /// confirmation first). Existing numbers are never overwritten.
+  /// Matching is tiered (exact key, same words any order, one extra
+  /// word — see DatabaseHelper.contactCandidatesFor) and HONEST:
+  /// afterwards a report names every party that still has no number,
+  /// split by reason — no matching contact, or the contact carries
+  /// two different numbers (tap the party there to pick which one).
   Future<void> _fillPhonesFromContacts(AppProvider p) async {
     try {
       final granted =
@@ -642,58 +646,153 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
       final contacts =
           await FlutterContacts.getContacts(withProperties: true);
-      final byKey = <String, String>{};
-      final ambiguous = <String>{};
+      // Index every contact under its display name AND its name
+      // parts in both orders, collecting ALL distinct numbers per
+      // key — a contact with two numbers must surface as a choice,
+      // never be silently dropped.
+      final numbersByKey = <String, Set<String>>{};
       for (final c in contacts) {
-        final key = DatabaseHelper.contactNameKey(c.displayName);
-        if (key.isEmpty) continue;
+        final keys = DatabaseHelper.contactNameKeys(
+          displayName: c.displayName,
+          first: c.name.first,
+          last: c.name.last,
+        );
+        if (keys.isEmpty) continue;
         for (final ph in c.phones) {
           final num = ph.number.replaceAll(RegExp(r'[\s-]'), '');
           if (num.isEmpty) continue;
-          final prev = byKey[key];
-          if (prev == null) {
-            byKey[key] = num;
-          } else if (prev != num) {
-            ambiguous.add(key);
+          for (final key in keys) {
+            (numbersByKey[key] ??= <String>{}).add(num);
           }
         }
       }
-      byKey.removeWhere((k, _) => ambiguous.contains(k));
       final missing = await _db.getPartiesMissingPhone(p.businessId);
-      final matchable = missing
-          .where((x) =>
-              byKey.containsKey(DatabaseHelper.contactNameKey(x.name)))
-          .toList();
       if (!mounted) return;
-      if (matchable.isEmpty) {
+      if (missing.isEmpty) {
         showSnack(context, p.t('noContactMatches'));
         return;
       }
-      final go = await showDialog<bool>(
-        context: context,
-        builder: (c) => AlertDialog(
-          title: Text(p.t('fillPhonesFromContacts')),
-          content: Text('${p.t('fillPhonesFound')}: ${matchable.length}\n\n'
-              '${matchable.take(5).map((x) => x.name).join('\n')}'),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(c, false),
-                child: Text(p.t('cancel'))),
-            TextButton(
-                onPressed: () => Navigator.pop(c, true),
-                child: Text(p.t('fillNumbers'))),
-          ],
-        ),
-      );
-      if (go != true) return;
-      final filled =
-          await _db.fillPartyPhonesFromContacts(p.businessId, byKey);
-      if (!mounted) return;
-      p.bump();
-      showSnack(context, '${p.t('contactsFilled')}: $filled');
+      final matchable = <Party>[];
+      final needsChoice = <(Party, List<String>)>[];
+      final noContact = <Party>[];
+      for (final party in missing) {
+        final candidates =
+            DatabaseHelper.contactCandidatesFor(party.name, numbersByKey);
+        if (candidates.length == 1) {
+          matchable.add(party);
+        } else if (candidates.length > 1) {
+          needsChoice.add((party, candidates.toList()..sort()));
+        } else {
+          noContact.add(party);
+        }
+      }
+      var filled = 0;
+      if (matchable.isNotEmpty) {
+        final go = await showDialog<bool>(
+          context: context,
+          builder: (c) => AlertDialog(
+            title: Text(p.t('fillPhonesFromContacts')),
+            content: Text('${p.t('fillPhonesFound')}: ${matchable.length}\n\n'
+                '${matchable.take(5).map((x) => x.name).join('\n')}'),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.pop(c, false),
+                  child: Text(p.t('cancel'))),
+              TextButton(
+                  onPressed: () => Navigator.pop(c, true),
+                  child: Text(p.t('fillNumbers'))),
+            ],
+          ),
+        );
+        if (!mounted) return;
+        if (go != true) return;
+        filled = await _db.fillPartyPhonesFromContacts(
+            p.businessId, numbersByKey);
+        if (!mounted) return;
+        p.bump();
+      }
+      await _showFillReport(p, filled, needsChoice, noContact);
     } catch (e) {
       if (mounted) showSnack(context, '${p.t('importFailed')}: $e');
     }
+  }
+
+  /// Post-fill report: what was filled, and — by name — who still has
+  /// no number and why. Parties whose contact has two numbers can be
+  /// tapped to pick the right one on the spot.
+  Future<void> _showFillReport(
+    AppProvider p,
+    int filled,
+    List<(Party, List<String>)> needsChoice,
+    List<Party> noContact,
+  ) async {
+    await showDialog<void>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: Text(p.t('fillPhonesFromContacts')),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('${p.t('contactsFilled')}: $filled'),
+                if (needsChoice.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Text('${p.t('multipleNumbersPick')}: ${needsChoice.length}',
+                      style: const TextStyle(fontWeight: FontWeight.w700)),
+                  for (final (party, numbers) in needsChoice)
+                    ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(party.name),
+                      subtitle: Text(numbers.join('  •  ')),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () => _pickNumberForParty(p, party, numbers),
+                    ),
+                ],
+                if (noContact.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Text('${p.t('stillNoNumber')}: ${noContact.length}',
+                      style: const TextStyle(fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 4),
+                  for (final party in noContact) Text(party.name),
+                ],
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(c), child: const Text('OK')),
+        ],
+      ),
+    );
+  }
+
+  /// Number chooser for a party whose contact carries two different
+  /// numbers: the picked number is saved to the party at once.
+  Future<void> _pickNumberForParty(
+      AppProvider p, Party party, List<String> numbers) async {
+    final picked = await showDialog<String>(
+      context: context,
+      builder: (c) => SimpleDialog(
+        title: Text(party.name),
+        children: [
+          for (final n in numbers)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(c, n),
+              child: Text(n),
+            ),
+        ],
+      ),
+    );
+    if (picked == null || party.id == null || !mounted) return;
+    await _db.setPartyPhone(party.id!, picked);
+    p.bump();
+    if (!mounted) return;
+    showSnack(context, p.t('savedSuccessfully'));
   }
 
   Future<void> _uploadBackupJsonToDrive(AppProvider p) async {

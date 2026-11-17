@@ -282,6 +282,76 @@ class DatabaseHelper {
       .replaceAll(RegExp(r'\s+'), ' ')
       .trim();
 
+  /// All match keys one contact should be indexed under: its display
+  /// name PLUS the keys built from its name parts in both orders.
+  /// A contact's displayName is not always what the user sees (it can
+  /// be composed differently, e.g. 'Punjab, Kashif'), while the party
+  /// was typed from the name parts — indexing every variant makes
+  /// identical-looking names match.
+  static Set<String> contactNameKeys({
+    required String displayName,
+    String first = '',
+    String last = '',
+  }) {
+    final keys = <String>{};
+    void add(String s) {
+      final k = contactNameKey(s);
+      if (k.isNotEmpty) keys.add(k);
+    }
+
+    add(displayName);
+    add('$first $last');
+    add('$last $first');
+    return keys;
+  }
+
+  /// Candidate phone numbers for one party name from a contacts
+  /// index (normalized name key → the distinct numbers seen under
+  /// it), best match tier first:
+  /// 1. exact normalized-key match;
+  /// 2. same set of name words in any order ('Punjab Kashif' for
+  ///    'Kashif Punjab');
+  /// 3. subset — one side has an extra word ('Kashif Punjab Gujrat'
+  ///    vs contact 'Kashif Punjab').
+  /// Only the best tier that yields anything is consulted. The
+  /// result is a SET: exactly one number = safe to fill; two or more
+  /// = the user must choose (never guess a number onto the wrong
+  /// party); empty = no contact matches at all.
+  static Set<String> contactCandidatesFor(
+      String partyName, Map<String, Set<String>> numbersByKey) {
+    final key = contactNameKey(partyName);
+    if (key.isEmpty) return const {};
+    final exact = numbersByKey[key];
+    if (exact != null && exact.isNotEmpty) return exact;
+    Set<String> tokensOf(String k) =>
+        k.split(' ').where((t) => t.isNotEmpty).toSet();
+    final tokens = tokensOf(key);
+    if (tokens.isEmpty) return const {};
+    final sameWords = <String>{};
+    final subset = <String>{};
+    for (final entry in numbersByKey.entries) {
+      final ct = tokensOf(entry.key);
+      if (ct.isEmpty) continue;
+      if (ct.length == tokens.length && ct.containsAll(tokens)) {
+        sameWords.addAll(entry.value);
+      } else if (ct.length < tokens.length
+          ? tokens.containsAll(ct)
+          : ct.containsAll(tokens)) {
+        subset.addAll(entry.value);
+      }
+    }
+    if (sameWords.isNotEmpty) return sameWords;
+    return subset;
+  }
+
+  /// The single phone a party can be filled with, or null when the
+  /// match is absent or ambiguous (see [contactCandidatesFor]).
+  static String? resolveContactPhone(
+      String partyName, Map<String, Set<String>> numbersByKey) {
+    final candidates = contactCandidatesFor(partyName, numbersByKey);
+    return candidates.length == 1 ? candidates.single : null;
+  }
+
   Future<int> countPartyTransactions(int partyId) async {
     final d = await db;
     final r = await d.rawQuery(
@@ -303,17 +373,21 @@ class DatabaseHelper {
     return rows.map(Party.fromMap).toList();
   }
 
-  /// Fills empty party phones from a contacts map (normalized name
-  /// key → phone). A number that already exists is never overwritten.
-  /// Returns how many parties got a number.
+  /// Fills empty party phones from a contacts index (normalized name
+  /// key → the distinct numbers seen under it). A party is filled
+  /// only when [resolveContactPhone] yields exactly ONE number —
+  /// parties whose contact carries two different numbers, or whose
+  /// name matches ambiguously, are left empty for the user to resolve
+  /// (Settings surfaces them by name). A number that already exists
+  /// is never overwritten. Returns how many parties got a number.
   Future<int> fillPartyPhonesFromContacts(
-      int businessId, Map<String, String> phoneByNameKey) async {
-    if (phoneByNameKey.isEmpty) return 0;
+      int businessId, Map<String, Set<String>> numbersByKey) async {
+    if (numbersByKey.isEmpty) return 0;
     final missing = await getPartiesMissingPhone(businessId);
     final d = await db;
     var filled = 0;
     for (final party in missing) {
-      final phone = phoneByNameKey[contactNameKey(party.name)];
+      final phone = resolveContactPhone(party.name, numbersByKey);
       if (phone != null && phone.trim().isNotEmpty) {
         await d.update('parties', {'phone': phone.trim()},
             where: 'id = ?', whereArgs: [party.id]);
@@ -322,6 +396,12 @@ class DatabaseHelper {
     }
     return filled;
   }
+
+  /// Sets one party's phone number, touching nothing else (the
+  /// Reminders screen's add-number action for a party that has none).
+  Future<void> setPartyPhone(int partyId, String phone) async =>
+      (await db).update('parties', {'phone': phone.trim()},
+          where: 'id = ?', whereArgs: [partyId]);
 
   Future<void> setPartyDeleted(int id, bool deleted) async => (await db).update(
         'parties', {'deleted': deleted ? 1 : 0}, where: 'id = ?', whereArgs: [id]);

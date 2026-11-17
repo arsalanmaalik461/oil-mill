@@ -44,9 +44,9 @@ void main() {
     expect(await db.countPartyTransactions(rehan), 0);
 
     final filled = await db.fillPartyPhonesFromContacts(1, {
-      DatabaseHelper.contactNameKey('kashif   PUNJAB'): '03119998887',
-      DatabaseHelper.contactNameKey('Rehan'): '03999999999',
-      DatabaseHelper.contactNameKey('m asim palcha'): '03221114445',
+      DatabaseHelper.contactNameKey('kashif   PUNJAB'): {'03119998887'},
+      DatabaseHelper.contactNameKey('Rehan'): {'03999999999'},
+      DatabaseHelper.contactNameKey('m asim palcha'): {'03221114445'},
     });
     expect(filled, 2, reason: 'Kashif + Asim filled, Rehan untouched');
 
@@ -67,5 +67,89 @@ void main() {
     expect(dueKashif, hasLength(1),
         reason: 'filled + owing party is due for a reminder');
     expect(dueKashif.single.phone, '03119998887');
+  });
+
+  group('contact matching tiers (same-phone fill failures)', () {
+    test('contactNameKeys covers display name AND name parts', () {
+      final keys = DatabaseHelper.contactNameKeys(
+          displayName: 'Punjab, Kashif', first: 'Kashif', last: 'Punjab');
+      // The party typed as 'Kashif Punjab' must find this contact even
+      // though its displayName is composed the other way round.
+      expect(keys, contains(DatabaseHelper.contactNameKey('Kashif Punjab')));
+      expect(keys, contains(DatabaseHelper.contactNameKey('Punjab, Kashif')));
+    });
+
+    test('exact, reordered and extra-word matches resolve', () {
+      final idx = <String, Set<String>>{
+        'kashif punjab': {'03110000001'},
+        'asim palcha': {'03220000002'},
+      };
+      expect(DatabaseHelper.resolveContactPhone('Kashif Punjab', idx),
+          '03110000001');
+      expect(DatabaseHelper.resolveContactPhone('Punjab Kashif', idx),
+          '03110000001',
+          reason: 'same words, any order');
+      expect(DatabaseHelper.resolveContactPhone('Asim Palcha Gujrat', idx),
+          '03220000002',
+          reason: 'extra word on the party side');
+      expect(DatabaseHelper.resolveContactPhone('Asim', idx), '03220000002',
+          reason: 'extra word on the contact side');
+      expect(DatabaseHelper.resolveContactPhone('Nobody Here', idx), isNull);
+    });
+
+    test('two numbers under one name surface as a choice, never a guess',
+        () {
+      final idx = <String, Set<String>>{
+        'kashif punjab': {'03110000001', '03220000009'},
+      };
+      expect(DatabaseHelper.contactCandidatesFor('Kashif Punjab', idx),
+          {'03110000001', '03220000009'},
+          reason: 'both numbers are reported so the user can pick');
+      expect(DatabaseHelper.resolveContactPhone('Kashif Punjab', idx),
+          isNull,
+          reason: 'no silent pick between two numbers');
+    });
+
+    test('ambiguous subset matches stay unresolved', () {
+      final idx = <String, Set<String>>{
+        'kashif punjab': {'03110000001'},
+        'kashif lahore': {'03220000002'},
+      };
+      expect(DatabaseHelper.contactCandidatesFor('Kashif', idx),
+          {'03110000001', '03220000002'});
+      expect(DatabaseHelper.resolveContactPhone('Kashif', idx), isNull);
+    });
+
+    test('exact match wins over a reordered twin', () {
+      final idx = <String, Set<String>>{
+        'kashif punjab': {'03110000001'},
+        'punjab kashif': {'03990000000'},
+      };
+      expect(DatabaseHelper.resolveContactPhone('Kashif Punjab', idx),
+          '03110000001');
+    });
+  });
+
+  test('fill uses word-order matching; two-number parties stay empty',
+      () async {
+    final p1 = await db.insertParty(Party(
+        businessId: 3, type: 'customer', name: 'Punjab Kashif', phone: ''));
+    await db.insertParty(Party(
+        businessId: 3, type: 'customer', name: 'Do Number Wala', phone: ''));
+    final filled = await db.fillPartyPhonesFromContacts(3, {
+      'kashif punjab': {'03110000001'},
+      'do number wala': {'03110000002', '03220000003'},
+    });
+    expect(filled, 1, reason: 'only the unambiguous party is filled');
+    final parties = await db.getParties(3);
+    expect(parties.firstWhere((x) => x.id == p1).phone, '03110000001');
+    expect(parties.firstWhere((x) => x.name == 'Do Number Wala').phone, '',
+        reason: 'two-number contact is left for the user to pick');
+    // And the manual path the report points to: setPartyPhone.
+    final twoNum = parties.firstWhere((x) => x.name == 'Do Number Wala');
+    await db.setPartyPhone(twoNum.id!, '03220000003');
+    final after = await db.getParties(3);
+    expect(after.firstWhere((x) => x.name == 'Do Number Wala').phone,
+        '03220000003');
   });
 }
