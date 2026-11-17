@@ -1175,8 +1175,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ListTile(
                     leading:
                         const Icon(Icons.person, color: AppColors.primary),
-                    title: Text('${p.t('loggedInAs')}: ${p.sessionUsername}'),
-                    subtitle: cur != null ? Text(cur.name) : null,
+                    // Presentable account row: the BUSINESS name is the
+                    // main label; the secondary line is the account
+                    // email (or the user ID when no email is on
+                    // record) — never a bare "Logged in as: 1".
+                    title: Text(
+                      cur != null && cur.name.isNotEmpty
+                          ? cur.name
+                          : '${p.t('loggedInAs')}: ${p.sessionUsername}',
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    subtitle: Text(
+                      _accountUser != null && _accountUser!.email.isNotEmpty
+                          ? _accountUser!.email
+                          : (cur != null && cur.name.isNotEmpty
+                              ? '${p.t('usernameLbl')}: ${p.sessionUsername}'
+                              : p.sessionUsername),
+                    ),
                   ),
                   ListTile(
                     leading: const Icon(Icons.key, color: AppColors.primary),
