@@ -247,6 +247,78 @@ class FirebaseService {
     return id != null ? '$id' : 'x$index';
   }
 
+  /// FNV-1a 64-bit over the UTF-8 bytes of [input], as 16 lowercase
+  /// hex chars. Computed on two 32-bit halves so every intermediate
+  /// stays a small int: Dart hex literals wrap to signed 64-bit, so a
+  /// plain `hash * prime & 0xFFFF...` would not actually truncate.
+  /// Verified against the published FNV-1a test vectors.
+  static String _fnv1a64Hex(String input) {
+    var hi = 0xcbf29ce4; // offset basis, high 32 bits
+    var lo = 0x84222325; // offset basis, low 32 bits
+    const pHi = 0x100; // FNV prime 0x100000001b3, high part
+    const pLo = 0x1b3; // FNV prime, low part
+    for (final byte in utf8.encode(input)) {
+      lo ^= byte;
+      final lowProduct = lo * pLo;
+      final mid = lo * pHi + hi * pLo + (lowProduct >> 32);
+      lo = lowProduct & 0xFFFFFFFF;
+      hi = mid & 0xFFFFFFFF;
+    }
+    return hi.toRadixString(16).padLeft(8, '0') +
+        lo.toRadixString(16).padLeft(8, '0');
+  }
+
+  /// Canonical, type-tagged encoding of one synced value, so two
+  /// values hash equal only when they are truly the same content
+  /// (an integral double encodes like the matching int, because
+  /// SQLite REAL and Firestore numbers round-trip between the two).
+  static String _canonicalSyncValue(Object? v) {
+    if (v == null) return 'n';
+    if (v is bool) return v ? 'b:1' : 'b:0';
+    if (v is int) return 'i:$v';
+    if (v is double) {
+      if (v.isFinite &&
+          v == v.truncateToDouble() &&
+          v.abs() < 9007199254740992) {
+        return 'i:${v.toInt()}';
+      }
+      return 'd:$v';
+    }
+    if (v is String) return 's:${v.length}:$v';
+    if (v is Timestamp) return 't:${v.millisecondsSinceEpoch}';
+    if (v is List) return 'l:[${v.map(_canonicalSyncValue).join(',')}]';
+    if (v is Map) {
+      final keys = v.keys.map((k) => '$k').toList()..sort();
+      final parts =
+          keys.map((k) => 's:${k.length}:$k=${_canonicalSyncValue(v[k])}');
+      return 'm:{${parts.join(',')}}';
+    }
+    final s = '$v';
+    return 's:${s.length}:$s';
+  }
+
+  /// Content hash of one row for delta sync. The cloud-only keys
+  /// `_sync_hash` (the hash itself) and `attachment_drive_id` (a Drive
+  /// pointer compared separately) are excluded, so a row hashes the
+  /// same before upload, in the cloud, and after a restore.
+  static String rowSyncHash(Map<String, dynamic> row) {
+    final keys = row.keys
+        .where((k) => k != '_sync_hash' && k != 'attachment_drive_id')
+        .toList()
+      ..sort();
+    final parts =
+        keys.map((k) => 's:${k.length}:$k=${_canonicalSyncValue(row[k])}');
+    return _fnv1a64Hex('m:{${parts.join(',')}}');
+  }
+
+  /// Combined hash of a whole table's doc-id → row-hash map. If this
+  /// matches what the last successful sync stored, the table is
+  /// unchanged and sync skips it without any Firestore traffic.
+  static String tableSyncHash(Map<String, String> idToHash) {
+    final ids = idToHash.keys.toList()..sort();
+    return _fnv1a64Hex(ids.map((id) => '$id:${idToHash[id]}').join('\n'));
+  }
+
 }
 
 /// One app-user record (Firestore collection `app_users`, doc id = username).
@@ -547,6 +619,7 @@ extension FirebaseUsers on FirebaseService {
   /// (they are not database columns).
   Future<void> _resolveCloudImage(Map<String, dynamic> row) async {
     row.remove('attachment_storage'); // legacy key, no longer used
+    row.remove('_sync_hash'); // delta-sync bookkeeping, not a column
     final driveId = row.remove('attachment_drive_id');
     if (driveId is! String || driveId.isEmpty) return;
     try {
@@ -686,13 +759,32 @@ extension FirebaseUsers on FirebaseService {
       for (final row in rows) {
         await _attachCloudImage(username, businessId, table, row);
       }
+      // Delta sync: hash every local row and combine into one table
+      // hash. If it matches what this device's last successful sync
+      // stored, the table is unchanged — skip it entirely, with no
+      // Firestore read or write (re-uploading every row on every sync
+      // burned through the free plan's daily write quota).
+      final localHashes = <String, String>{};
+      for (var i = 0; i < rows.length; i++) {
+        localHashes[FirebaseService.rowDocId(rows[i], i)] =
+            FirebaseService.rowSyncHash(rows[i]);
+      }
+      final combined = FirebaseService.tableSyncHash(localHashes);
+      final hashKey = 'sync_tbl_hash_${username}_${businessId}_$table';
+      if (prefs.getString(hashKey) == combined) {
+        count += rows.length;
+        continue;
+      }
       final tableRef = root.doc(table);
       final rowsRef = tableRef.collection('rows');
       final existing = await rowsRef.get();
+      final hadCloudDocs = existing.docs.isNotEmpty;
+      final cloudDocs = {for (final d in existing.docs) d.id: d};
       final staleIds =
           existing.docs.map((d) => d.id).toSet();
       var batch = _firestore!.batch();
       var ops = 0;
+      var totalOps = 0;
       Future<void> flush() async {
         if (ops == 0) return;
         await batch.commit();
@@ -703,19 +795,46 @@ extension FirebaseUsers on FirebaseService {
       for (var i = 0; i < rows.length; i++) {
         final id = FirebaseService.rowDocId(rows[i], i);
         staleIds.remove(id);
-        batch.set(rowsRef.doc(id), rows[i]);
+        final localHash = localHashes[id]!;
+        final cloudDoc = cloudDocs[id];
+        if (cloudDoc != null) {
+          final cloudData = cloudDoc.data();
+          final storedHash = cloudData['_sync_hash'];
+          // Legacy docs written before delta sync carry no hash:
+          // hash the cloud content itself. Any mismatch uploads —
+          // the safe direction.
+          final cloudHash = storedHash is String
+              ? storedHash
+              : FirebaseService.rowSyncHash(cloudData);
+          final cloudDriveId = cloudData['attachment_drive_id'];
+          if (cloudHash == localHash &&
+              cloudDriveId == rows[i]['attachment_drive_id']) {
+            continue; // unchanged — no write
+          }
+          // Keep a Drive id uploaded from another device; a plain
+          // set would wipe it from the document.
+          if (rows[i]['attachment_drive_id'] == null && cloudDriveId != null) {
+            rows[i]['attachment_drive_id'] = cloudDriveId;
+          }
+        }
+        batch.set(rowsRef.doc(id), {...rows[i], '_sync_hash': localHash});
+        totalOps++;
         if (++ops >= 400) await flush();
       }
       for (final oldId in staleIds) {
         batch.delete(rowsRef.doc(oldId));
+        totalOps++;
         if (++ops >= 400) await flush();
       }
       await flush();
-      // Replaces the table document, dropping any legacy `rows` array.
-      await tableRef.set({
-        'row_count': rows.length,
-        'updated_at': FieldValue.serverTimestamp(),
-      });
+      if (totalOps > 0 || !hadCloudDocs) {
+        // Replaces the table document, dropping any legacy `rows` array.
+        await tableRef.set({
+          'row_count': rows.length,
+          'updated_at': FieldValue.serverTimestamp(),
+        });
+      }
+      await prefs.setString(hashKey, combined);
       count += rows.length;
     }
     await _users.doc(username).set({
@@ -787,6 +906,16 @@ extension FirebaseUsers on FirebaseService {
     }
     if (count == 0) return 0;
     await DatabaseHelper.instance.importBusinessData(businessId, data);
+    // Local rows now mirror the cloud, so this device's stored
+    // per-table sync hashes no longer describe a known upload state:
+    // clear them and let the next sync revalidate against the cloud
+    // (per-row hashes still keep that pass write-cheap).
+    final prefs = await SharedPreferences.getInstance();
+    final prefix = 'sync_tbl_hash_${username}_${businessId}_';
+    for (final key
+        in prefs.getKeys().where((k) => k.startsWith(prefix)).toList()) {
+      await prefs.remove(key);
+    }
     return count;
   }
 }
