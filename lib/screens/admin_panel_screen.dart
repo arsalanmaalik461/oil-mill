@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -52,9 +54,15 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
     if (_loadingList) return;
     setState(() => _loadingList = true);
     try {
-      final users = await FirebaseService.instance.listUsers();
+      final users = await FirebaseService.instance
+          .listUsers()
+          .timeout(const Duration(seconds: 30));
       if (!mounted) return;
       setState(() => _users = users);
+    } on TimeoutException {
+      if (mounted) {
+        showSnack(context, 'Taking too long. Check your internet and try again.');
+      }
     } catch (e) {
       if (mounted) showSnack(context, '$e');
     } finally {
@@ -80,15 +88,19 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
       // generate the next one and retry.
       String? createdId;
       for (var attempt = 0; attempt < 5 && createdId == null; attempt++) {
-        final candidate = await FirebaseService.instance.generateUserId();
+        final candidate = await FirebaseService.instance
+            .generateUserId()
+            .timeout(const Duration(seconds: 30));
         try {
-          await FirebaseService.instance.createUser(
-            username: candidate,
-            businessName: business,
-            email: _emailCtrl.text.trim(),
-            phone: _phoneCtrl.text.trim(),
-            password: password,
-          );
+          await FirebaseService.instance
+              .createUser(
+                username: candidate,
+                businessName: business,
+                email: _emailCtrl.text.trim(),
+                phone: _phoneCtrl.text.trim(),
+                password: password,
+              )
+              .timeout(const Duration(seconds: 30));
           createdId = candidate;
         } on StateError catch (e) {
           if (e.message != 'user-exists') rethrow;
@@ -131,6 +143,9 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
           ],
         ),
       );
+    } on TimeoutException {
+      if (!mounted) return;
+      showSnack(context, 'Taking too long. Check your internet and try again.');
     } on StateError catch (e) {
       if (!mounted) return;
       showSnack(
