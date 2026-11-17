@@ -106,6 +106,7 @@ class _ItemFormScreenState extends State<ItemFormScreen> {
     } else {
       await db.insertItem(item);
     }
+    p.bump(); // schedule cloud sync for this save
     if (!mounted) return;
     showSnack(context, p.t('savedSuccessfully'));
     Navigator.pop(context, true);
