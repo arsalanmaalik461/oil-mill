@@ -200,6 +200,10 @@ class _PartyFormScreenState extends State<PartyFormScreen> {
     } else {
       await db.insertParty(party);
     }
+    // Funnel rule: the writer bumps, so this save schedules the
+    // cloud auto-sync (Firestore ~10s, Drive ~45s) no matter which
+    // caller opened this form.
+    p.bump();
     if (!mounted) return;
     showSnack(context, p.t('savedSuccessfully'));
     Navigator.pop(context, true);
