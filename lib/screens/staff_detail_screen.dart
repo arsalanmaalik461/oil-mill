@@ -51,6 +51,7 @@ class _StaffDetailScreenState extends State<StaffDetailScreen> {
     );
     if (ok != true || pay.id == null) return;
     await _db.deleteSalaryPayment(pay.id!);
+    p.bump(); // schedule cloud sync for this delete
     _load();
   }
 
@@ -128,6 +129,7 @@ class _StaffDetailScreenState extends State<StaffDetailScreen> {
     final ok = await confirmDelete(context, p.t('confirmDelete'));
     if (!ok || !mounted) return;
     await _db.setStaffDeleted(_staff.id!, true);
+    p.bump(); // schedule cloud sync for this delete
     if (!mounted) return;
     showSnack(context, p.t('deleted'));
     Navigator.pop(context);
@@ -219,6 +221,7 @@ class _StaffDetailScreenState extends State<StaffDetailScreen> {
       note: note,
       dateTime: when,
     ));
+    p.bump(); // schedule cloud sync for this save
     if (!mounted) return;
     showSnack(context, p.t('savedSuccessfully'));
     _load();
